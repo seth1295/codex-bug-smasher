@@ -347,7 +347,7 @@ export async function runComponentScans(
     ...(retryPlanPath === undefined ? {} : { retryPlanPath }),
     findingCount,
     sourceFindingCount,
-    reviewType: bugScan ? "functional_bug" : "security",
+    reviewType: bugScan ? ("functional_bug" as const) : ("security" as const),
     ...(bugAggregation === undefined
       ? {}
       : {
