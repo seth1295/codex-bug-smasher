@@ -4583,7 +4583,6 @@ describe("CodexSecurity orchestration", () => {
         const result = client.run(repository, {
           mode: "deep",
           maxCostUsd: 0.004,
-          postScanPrompt: "Do not spend another model turn.",
           onWarning: (warning) => warnings.push(warning),
           signal: AbortSignal.timeout(5_000),
         });
