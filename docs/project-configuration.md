@@ -120,10 +120,15 @@ The resolver maps file keys to the existing SDK options:
 | `output.directory`                        | `outputDir`                           | `--output-dir`                                       |
 | `codex`                                   | Constructor `codexOverrides`          | `--codex`, model/provider flags                      |
 
+Build the checked-out SDK from the repository root as described in the README.
+The examples below run from the repository root and import that local build.
 Use an explicit file with `loadProjectConfig()`:
 
 ```ts
-import { CodexSecurity, loadProjectConfig } from "@openai/codex-security";
+import {
+  CodexSecurity,
+  loadProjectConfig,
+} from "./sdk/typescript/dist/index.js";
 
 const { config, options } = await loadProjectConfig("codex-security.yaml");
 await using security = new CodexSecurity(config);
@@ -143,7 +148,7 @@ For configuration already in memory, pass the same structured object to
 import {
   resolveProjectConfig,
   type ProjectConfigInput,
-} from "@openai/codex-security";
+} from "./sdk/typescript/dist/index.js";
 
 const input = {
   scan: { mode: "deep", scope: { paths: ["src"] } },

@@ -132,7 +132,9 @@ export async function runComponentScans(
   if (auth !== undefined && auth !== "auto") {
     const source = environment ?? process.env;
     const provider = scanModelProvider(
-      await mergedCodexConfig(options.config ?? {}),
+      await mergedCodexConfig(options.config ?? {}, {
+        mode: options.scanOptions?.mode,
+      }),
     );
     scanAuthentication(source, auth, provider);
     environment = selectedScanEnvironment(source, auth, provider);
@@ -153,6 +155,7 @@ export async function runComponentScans(
     repository,
     options.auto
       ? await (options.planComponents ?? planComponents)(repository, {
+          mode: options.scanOptions?.mode,
           auth,
           cyberAccessProgram: options.scanOptions?.cyberAccessProgram,
           config: options.config,
@@ -371,6 +374,7 @@ async function deduplicateFindings(
         { before: [...previous], after: current },
         {
           allowHistoricalUncertainty: true,
+          mode: options.scanOptions?.mode,
           auth: options.scanOptions?.auth,
           cyberAccessProgram: options.scanOptions?.cyberAccessProgram,
           config: options.config ?? {},

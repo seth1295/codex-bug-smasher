@@ -11,7 +11,7 @@ Examples and templates for using Codex Security:
   per row, and validate the file before publishing:
 
   ```bash
-  npx @openai/codex-security publish scan --to cloud \
+  node sdk/typescript/bin/codex-security.mjs publish scan --to cloud \
     --csv /path/to/findings.csv --dry-run --json
   ```
 
@@ -33,13 +33,11 @@ Examples and templates for using Codex Security:
   manual full or committed-diff scans against Azure Repos, with OIDC credentials,
   report artifacts, and optional native SARIF publishing.
 
-## npm package
+## Source checkout
 
-This top-level `examples/` directory is available in the repository only; it is
-not included in the `@openai/codex-security` npm package. The package is built
-from [`sdk/typescript`](../sdk/typescript/package.json), whose `files` list
-includes only the CLI launcher, compiled SDK, bundled plugin, license, and
-package README. The package check rejects files outside its expected contents.
+This top-level `examples/` directory is available in the repository checkout.
+The fork is distributed as source; build the CLI from the repository root as
+shown in the [README](../README.md).
 
-The bundled plugin's own example artifacts are separate and remain part of the
-package.
+The SDK build has its own file manifest under `sdk/typescript`; top-level
+examples are not copied into that build.

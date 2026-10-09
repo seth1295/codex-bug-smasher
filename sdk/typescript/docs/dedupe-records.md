@@ -6,10 +6,10 @@ Findings API. It performs no authentication, update checks, local Codex launches
 candidate retrieval, or persistence. The host owns repository authorization,
 model execution, sessions, credentials, cancellation of remote work, and cleanup.
 
-The SDK equivalent is:
+Build the checked-out SDK from the repository root and run this example there:
 
 ```typescript
-import { deduplicateRecords } from "@openai/codex-security";
+import { deduplicateRecords } from "./sdk/typescript/dist/index.js";
 
 const result = await deduplicateRecords(input, {
   reviewRunner: {

@@ -1414,34 +1414,26 @@ describe("CLI", () => {
     },
   );
 
-  test("registers the scoped package as the MCP command", async () => {
+  test("registers the checked-out CLI entrypoint as the MCP command", async () => {
     const home = await temporaryDirectory("codex-security-mcp-home-");
     try {
+      const entrypoint = join(import.meta.dir, "../src/cli.ts");
       const child = await runCommand(
         process.execPath,
-        [
-          join(import.meta.dir, "../src/cli.ts"),
-          "mcp",
-          "add",
-          "--agent",
-          "amp",
-          "--full-output",
-        ],
+        [entrypoint, "mcp", "add", "--agent", "amp", "--full-output"],
         {
           env: { ...process.env, HOME: home, USERPROFILE: home },
           timeout: 30_000,
         },
       );
       expect(child.status).toBe(0);
-      expect(child.stdout).toContain(
-        "command: npx --yes @openai/codex-security --mcp",
-      );
+      expect(child.stdout).toContain("Registered codex-security as MCP server");
       const config = JSON.parse(
         await readFile(join(home, ".config", "amp", "settings.json"), "utf8"),
       );
       expect(config["amp.mcpServers"]["codex-security"]).toEqual({
-        command: "npx",
-        args: ["--yes", "@openai/codex-security", "--mcp"],
+        command: process.execPath,
+        args: [entrypoint, "--mcp"],
       });
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -4625,6 +4617,77 @@ describe("CLI", () => {
       ...fakePreflight("repo"),
     });
     expect(stderr.text()).not.toContain("Running scan");
+  });
+
+  test("uses the GPT-6 Luna Deep bug model and 2/1 worker defaults in dry runs", async () => {
+    const { stdout, stderr, runCli } = createCliTest(main);
+    const preflight: ScanPreflight = {
+      ...fakePreflight("repo"),
+      mode: "deep",
+      workers: 2,
+      subagents: 1,
+      stopAfterNoNew: 4,
+      stopAfterConsecutiveErrors: 3,
+      maxDiscoveryRuns: 40,
+      maxTimeHours: 96,
+      deepScanSources: {
+        workers: "default",
+        subagents: "default",
+        stopAfterNoNew: "default",
+        stopAfterConsecutiveErrors: "default",
+        maxDiscoveryRuns: "default",
+        maxTimeHours: "default",
+      },
+      model: "gpt-6-luna",
+      reasoningEffort: "xhigh",
+    };
+
+    expect(
+      await runCli(
+        ["scan", "repo", "--mode", "deep", "--dry-run", "--verbose", "--json"],
+        dependencies({
+          environment: { CODEX_SECURITY_LOG_LEVEL: "debug" },
+          preflight,
+        }),
+      ),
+    ).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({ dryRun: true, ...preflight });
+    expect(stderr.text()).toContain(
+      "codex-security: debug: scan.configuration cli_version=",
+    );
+    expect(stderr.text()).toContain('model="gpt-6-luna"');
+    expect(stderr.text()).toContain('reasoning_effort="xhigh"');
+    expect(stderr.text()).not.toContain("codex-security: debug: scan.started");
+
+    const explicitModel = "gpt-6.1-sol";
+    const explicitPreflight = { ...preflight, model: explicitModel };
+    const explicit = createCliTest(main);
+    expect(
+      await explicit.runCli(
+        [
+          "scan",
+          "repo",
+          "--mode",
+          "deep",
+          "--model",
+          explicitModel,
+          "--dry-run",
+          "--verbose",
+          "--json",
+        ],
+        dependencies({
+          environment: { CODEX_SECURITY_LOG_LEVEL: "debug" },
+          preflight: explicitPreflight,
+        }),
+      ),
+    ).toBe(0);
+    expect(JSON.parse(explicit.stdout.text())).toEqual({
+      dryRun: true,
+      ...explicitPreflight,
+    });
+    expect(explicit.stderr.text()).toContain(
+      `model=${JSON.stringify(explicitModel)}`,
+    );
   });
 
   test("renders dry-run output with Incur structured formats", async () => {

@@ -1056,11 +1056,9 @@ describe("CLI authentication", () => {
         expect(stderr.text()).toContain(
           "API key is selected for model authentication",
         );
+        expect(stderr.text()).toContain("this CLI's 'login status' command");
         expect(stderr.text()).toContain(
-          "npx @openai/codex-security login status",
-        );
-        expect(stderr.text()).toContain(
-          "npx @openai/codex-security logout', then 'npx @openai/codex-security login",
+          "this CLI's 'logout' command, then its 'login' command",
         );
         expect(stderr.text()).not.toContain("provide a valid API key");
         expect(stderr.text()).not.toContain("PRIVATE_UPSTREAM_DETAIL");

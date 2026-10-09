@@ -8,14 +8,15 @@ The API has no authentication. Keep it on loopback or behind an authenticated
 TLS proxy. Imports send the complete finding JSON to the configured embeddings
 endpoint. The database and generated embeddings stay in local storage.
 
-CLI examples use `codex-security`. With a local npm installation, use
-`npx @openai/codex-security` instead.
+CLI examples use `codex-security`. In this source checkout, invoke it from the
+repository root with `node sdk/typescript/bin/codex-security.mjs` after building
+the local CLI; see the root README for setup. The SDK examples below also run
+from the repository root and import the local build.
 
 ## Start the service
 
-Use the repository's
-[Compose file](https://github.com/openai/codex-security/blob/main/compose.findings.yaml)
-and [.env example](https://github.com/openai/codex-security/blob/main/.env.example).
+Use the repository's [Compose file](../../../compose.findings.yaml) and
+[.env example](../../../.env.example).
 From the repository root, copy the example if you do not already have a `.env`:
 
 ```bash
@@ -106,7 +107,7 @@ HTTP request. Upload failures and incomplete receipts fail the command. Uploads
 are not automatically retried because a lost response may have been committed.
 
 ```typescript
-import { publishScanToCustom } from "@openai/codex-security";
+import { publishScanToCustom } from "./sdk/typescript/dist/index.js";
 
 const receipt = await publishScanToCustom("/path/to/completed-scan", {
   findingsUrl: "http://localhost:3000",
@@ -287,7 +288,7 @@ By default, candidates come from its manifest's `scan.target.targetId`. Use
 `--all-repositories` to search the whole service.
 
 ```typescript
-import { deduplicateScan } from "@openai/codex-security";
+import { deduplicateScan } from "./sdk/typescript/dist/index.js";
 
 const result = await deduplicateScan("scan_example_001", {
   findingsUrl: "http://127.0.0.1:3000",
@@ -301,7 +302,7 @@ console.log(result.duplicateGroups);
 For a sealed scan directory outside local history, supply the checkout:
 
 ```typescript
-import { deduplicateScanDirectory } from "@openai/codex-security";
+import { deduplicateScanDirectory } from "./sdk/typescript/dist/index.js";
 
 const result = await deduplicateScanDirectory("/path/to/completed-scan", {
   repository: "/path/to/repository",
@@ -454,11 +455,11 @@ not support the migrated database.
 
 ## Run without Docker
 
-With the package's supported Node.js and Python versions installed:
+After building the source checkout as described in the root README, start the
+service from the repository root:
 
 ```bash
-npm install -g @openai/codex-security
-CODEX_SECURITY_STATE_DIR="$HOME/.codex-security-findings" codex-security serve --port 3000
+CODEX_SECURITY_STATE_DIR="$HOME/.codex-security-findings" node sdk/typescript/bin/codex-security.mjs serve --port 3000
 ```
 
 `--port` overrides `PORT`. The service does not load `.env`; export the embedding
@@ -466,25 +467,12 @@ key before importing findings. Without a state override, it shares the CLI's
 default state directory. `HOST`, `PORT`, `CODEX_SECURITY_STATE_DIR`, and `PYTHON`
 also work on Windows. Stop with Ctrl-C or SIGTERM.
 
-For source builds, prepare the
-[universal native payload](https://github.com/openai/codex-security/blob/main/plugins/codex-security/native/README.md#package-inputs),
-then run from `sdk/typescript`:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm --dir ../../plugins/codex-security/mcp-app install --frozen-lockfile
-pnpm run build:plugin
-pnpm run build
-node bin/codex-security.mjs serve --port 3000
-```
-
-`pnpm run start:server` and `node dist/server/index.js` also start the service.
-
 For renewable embedding credentials, import `OpenAiFindingEmbedder`,
 `SqliteFindingsStore`, and `startFindingsServer` from
-`@openai/codex-security/server`. The embedder accepts a static key or a callback
-`() => string | Promise<string>` as its first argument. It calls the callback
-before every HTTP batch; the caller handles token acquisition. Pass `fetch` as
-the second argument and the full endpoint URL as the third; omitting the URL
-uses the OpenAI endpoint. `startFindingsServer({ store, embeddings, host, port })`
-returns a Node HTTP server. Importing the module does not start a listener.
+`./sdk/typescript/dist/server/index.js`. The embedder accepts a static key or a
+callback `() => string | Promise<string>` as its first argument. It calls the
+callback before every HTTP batch; the caller handles token acquisition. Pass
+`fetch` as the second argument and the full endpoint URL as the third; omitting
+the URL uses the OpenAI endpoint. Call
+`startFindingsServer({ store, embeddings, host, port })` to create a Node HTTP
+server. Importing the module does not start a listener.

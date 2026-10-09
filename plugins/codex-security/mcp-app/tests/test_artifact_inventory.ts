@@ -434,7 +434,7 @@ async function createFixture(label: string) {
   const repoRoot = path.join(fixtureRoot, "repository");
   const scanRoot = path.join(fixtureRoot, "scan");
   const workerRoot = path.join(fixtureRoot, "worker");
-  const pluginRoot = new URL("../../", import.meta.url).pathname;
+  const pluginRoot = fileURLToPath(new URL("../../", import.meta.url));
   await mkdir(repoRoot, { recursive: true });
   await mkdir(scanRoot, { recursive: true });
   return {
@@ -461,7 +461,9 @@ async function createFixture(label: string) {
       layout: "scan",
       scope: ".",
       pluginRoot,
-      pythonCommand: process.env.PYTHON ?? "python3",
+      pythonCommand:
+        process.env.PYTHON?.trim() ||
+        (process.platform === "win32" ? "python" : "python3"),
     },
     worker: {
       root: workerRoot,

@@ -57,6 +57,9 @@ node sdk/typescript/bin/codex-security.mjs scan . --mode deep --plugin-path plug
 Use `node sdk/typescript/bin/codex-security.mjs --help` to browse commands, or
 `node sdk/typescript/bin/codex-security.mjs scan --help` for scan options and
 cost limits. Deep bug scans produce reports and do not apply fixes.
+Deep scans default to `gpt-6-luna` with `xhigh` reasoning; Standard scans keep
+their existing model default. Explicit CLI, project, or Codex profile model
+settings take precedence.
 
 ## TypeScript SDK
 

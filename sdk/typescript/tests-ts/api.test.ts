@@ -896,7 +896,7 @@ describe("CodexSecurity orchestration", () => {
         source: "OPENAI_API_KEY",
         verified: false,
       },
-      model: "gpt-5.6-sol",
+      model: "gpt-6-luna",
       reasoningEffort: "xhigh",
     });
     await expect(
@@ -938,7 +938,9 @@ describe("CodexSecurity orchestration", () => {
       },
     );
 
-    await expect(client.preflight(repository)).resolves.toMatchObject({
+    await expect(
+      client.preflight(repository, { mode: "deep" }),
+    ).resolves.toMatchObject({
       model: "configured-model",
       reasoningEffort: "high",
     });
@@ -971,7 +973,7 @@ describe("CodexSecurity orchestration", () => {
     );
 
     await expect(
-      client.preflight(repository, { maxCostUsd: 5 }),
+      client.preflight(repository, { mode: "deep", maxCostUsd: 5 }),
     ).resolves.toMatchObject({
       model: "gpt-5.6-terra",
       reasoningEffort: "high",
@@ -2706,6 +2708,9 @@ describe("CodexSecurity orchestration", () => {
     const ambientHome = join(root, "ambient-home");
     const codexHome = join(root, "runtime-home");
     const scanDir = join(root, "scan");
+    const sourcePluginRoot = fileURLToPath(
+      new URL("../../../plugins/codex-security/", import.meta.url),
+    );
     await mkdir(repository);
     await mkdir(join(ambientHome, "codex-security"), { recursive: true });
     await mkdir(codexHome);
@@ -2734,7 +2739,14 @@ describe("CodexSecurity orchestration", () => {
             join(ambientHome, "codex-security", "config.toml"),
             "[deep_scan]\nstop_after_no_new = 99\n",
           );
-          return preparedRuntime(codexHome);
+          const runtime = preparedRuntime(codexHome);
+          runtime.plugin = {
+            ...runtime.plugin,
+            pluginRoot: sourcePluginRoot,
+            installedRoot: sourcePluginRoot,
+            marketplaceRoot: sourcePluginRoot,
+          };
+          return runtime;
         },
         resolvePluginPython: async () => "/managed/python",
         prepareOutputDir: async () => scanDir,
@@ -2755,7 +2767,13 @@ describe("CodexSecurity orchestration", () => {
           recipe = JSON.parse(input!).recipe;
           return mockScanRegistration(args, input);
         },
-        createCodex: codexFactory(deepSettingsCaptured),
+        createCodex: (options) => {
+          expect(options.config).toMatchObject({
+            model: "gpt-6-luna",
+            model_reasoning_effort: "xhigh",
+          });
+          return codexFactory(deepSettingsCaptured)();
+        },
       },
     );
 

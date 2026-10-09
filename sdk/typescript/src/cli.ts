@@ -116,6 +116,7 @@ import {
 } from "./bulk-scan-discovery.js";
 import {
   DEFAULT_CODEX_CONFIG,
+  DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL,
   deepMerge,
   EXTERNAL_CODEX_PROVIDERS,
   isExternalModelProvider,
@@ -1228,7 +1229,11 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
   environment: process.env,
   prepareAuthenticationHome: prepareCodexSecurityCredentialHome,
   checkForUpdate: (signal) =>
-    checkForUpdate({ environment: process.env, signal }),
+    checkForUpdate({
+      environment: process.env,
+      entrypoint: process.argv[1],
+      signal,
+    }),
   hasStoredChatGPTSignIn: async (signal) => {
     signal?.throwIfAborted();
     const environment = Object.fromEntries(
@@ -3234,10 +3239,11 @@ export async function main(
     },
   });
   const cli = Cli.create("codex-security", {
-    description: "Deep-scan for functional bugs; Standard mode reviews security issues.",
+    description:
+      "Deep-scan for functional bugs; Standard mode reviews security issues.",
     version: VERSION,
     mcp: {
-      command: "npx --yes @openai/codex-security --mcp",
+      command: localMcpCommand(),
       tools: { discovery: "direct" },
       instructions:
         "Use info for read-only SDK metadata. Scans and other state-changing commands are CLI-only because the MCP transport cannot cancel active commands.",
@@ -3449,9 +3455,10 @@ export async function main(
             .describe(
               "Reuse completed work in the named local findings workflow.",
             ),
-          cyberAccessProgram: ScanSettingsSchema.shape.cyberAccessProgram.describe(
-            "Security-only access program for Standard scans; not supported for deep functional bug scans.",
-          ),
+          cyberAccessProgram:
+            ScanSettingsSchema.shape.cyberAccessProgram.describe(
+              "Security-only access program for Standard scans; not supported for deep functional bug scans.",
+            ),
           auth: ScanSettingsSchema.shape.auth.describe(
             "Select ChatGPT, OPENAI_API_KEY/CODEX_API_KEY, or automatic authentication (default: auto).",
           ),
@@ -3508,7 +3515,7 @@ export async function main(
           ),
           ...DEEP_SCAN_OPTION_SCHEMAS,
           ...modelOptions(
-            `OpenAI model to use (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model}).`,
+            `Model to use (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
           ).shape,
           provider: PROVIDER_OPTION,
           outputDir: optionValue("--output-dir")
@@ -3575,7 +3582,8 @@ export async function main(
               options.patchSeverity === undefined &&
               !options.createPr),
           {
-            message: "Patch options are not supported for functional bug scans.",
+            message:
+              "Patch options are not supported for functional bug scans.",
           },
         )
         .refine(
@@ -4130,7 +4138,9 @@ export async function main(
           postScanPromptFile: optionValue("--post-scan-prompt-file")
             .optional()
             .describe("Run FILE after each scan, including failures."),
-          ...modelOptions("Model for planning and component scans.").shape,
+          ...modelOptions(
+            `Model for planning and component scans (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
+          ).shape,
           provider: PROVIDER_OPTION,
           maxCost: z
             .number()
@@ -4220,7 +4230,9 @@ export async function main(
             const candidate = new ScanDashboard(errorOutput, {
               repository,
               presentation: "components",
-              model: scanModelConfiguration(await mergedCodexConfig(config)),
+              model: scanModelConfiguration(
+                await mergedCodexConfig(config, { mode: settings.mode }),
+              ),
               mode: settings.mode,
               maxCostUsd: settings.maxCostUsd,
               showCost: options.showCost,
@@ -4380,7 +4392,7 @@ export async function main(
           .optional()
           .describe("Run FILE after each scan, including failures."),
         ...modelOptions(
-          `OpenAI model for each repository (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model}).`,
+          `Model for each repository (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
         ).shape,
         provider: PROVIDER_OPTION,
         maxAttempts: z
@@ -5879,6 +5891,11 @@ export async function main(
     errorOutput.write(`codex-security: ${errorMessage(error)}\n`);
     return 2;
   }
+}
+
+function localMcpCommand(): string {
+  const entrypoint = process.argv[1] ?? fileURLToPath(import.meta.url);
+  return `"${process.execPath}" "${entrypoint}" --mcp`;
 }
 
 async function runScanImport(
@@ -8204,10 +8221,9 @@ async function executeScan(
       codexOverrides: arguments_.codexOverrides,
     };
     const selectedProfileName = config.codexOverrides?.["profile"];
-    const effectiveConfiguration = {
-      ...DEFAULT_CODEX_CONFIG,
-      ...config.codexOverrides,
-    };
+    const effectiveConfiguration = await mergedCodexConfig(config, {
+      mode: arguments_.mode,
+    });
     ({ model: effectiveModel, reasoningEffort: effectiveReasoningEffort } =
       scanModelConfiguration(effectiveConfiguration));
     patchServiceTier =
@@ -8289,7 +8305,9 @@ async function executeScan(
         repository,
         mode: arguments_.mode,
         showCost,
-        model: scanModelConfiguration(await mergedCodexConfig(config)),
+        model: scanModelConfiguration(
+          await mergedCodexConfig(config, { mode: arguments_.mode }),
+        ),
         ...(arguments_.maxCostUsd === undefined
           ? {}
           : { maxCostUsd: arguments_.maxCostUsd }),
@@ -8762,8 +8780,7 @@ async function executeScan(
     deepScanStop,
   );
   const completedScan = (exitCode: number): ScanOutcome => {
-    const findingCount =
-      result.bugFindings?.findings.length ?? findings.length;
+    const findingCount = result.bugFindings?.findings.length ?? findings.length;
     diagnostic("scan.completed", {
       coverage: result.coverage.completeness,
       findings: findingCount,
@@ -9043,8 +9060,8 @@ function scanFailureMessage(
     return (
       "Codex Security's stored ChatGPT sign-in could not be refreshed. " +
       "Codex may still need it to load workspace-managed policies when an API key is selected for model authentication. " +
-      "If the sign-in recently changed, check 'npx @openai/codex-security login status' and retry. " +
-      "Otherwise run 'npx @openai/codex-security logout', then 'npx @openai/codex-security login'."
+      "If the sign-in recently changed, check it with this CLI's 'login status' command and retry. " +
+      "Otherwise use this CLI's 'logout' command, then its 'login' command."
     );
   }
   switch (classification) {
@@ -9190,7 +9207,9 @@ function printScanSummary(
       );
     }
     if (showCost && result.cost) {
-      errorOutput.write(`Estimated cost: $${result.cost.estimatedUsd.toFixed(4)}\n`);
+      errorOutput.write(
+        `Estimated cost: $${result.cost.estimatedUsd.toFixed(4)}\n`,
+      );
     }
     if (deepScanStop?.reason) {
       errorOutput.write(`${deepScanStop.reason}\n`);
