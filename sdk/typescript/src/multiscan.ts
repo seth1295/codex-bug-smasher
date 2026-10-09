@@ -28,7 +28,7 @@ import {
   errorMessage,
   ScanCostLimitExceededError,
 } from "./errors.js";
-import type { CoverageDocument } from "./models.js";
+import type { BugPriority, CoverageDocument } from "./models.js";
 import { resolveScanPrompts } from "./prompt-files.js";
 import { requireSecureOutputAncestry, validateOutputDir } from "./runtime.js";
 import { DiffTarget, type ScanMode } from "./targets.js";
@@ -73,7 +73,14 @@ interface MultiscanReceipt extends MultiscanTask {
   warning?: string;
   warnings?: string[];
   policyFailed?: boolean;
+  reviewType?: "security" | "functional_bug";
+  findingCount?: number;
+  bugFindingCount?: number;
+  bugPriorityCounts?: Record<BugPriority, number>;
 }
+
+type MultiscanScanResult = Pick<ScanResult, "coverage" | "cost" | "findings"> &
+  Partial<Pick<ScanResult, "bugFindings" | "reviewType" | "threatModelPath">>;
 
 export interface MultiscanOptions extends ScanPromptSettings {
   inputPath: string;
@@ -86,7 +93,7 @@ export interface MultiscanOptions extends ScanPromptSettings {
   recoverScan?(
     scanDir: string,
     prompts: ScanPromptSettings,
-  ): Promise<Pick<ScanResult, "coverage" | "cost" | "findings"> | undefined>;
+  ): Promise<MultiscanScanResult | undefined>;
   maxCostUsd?: number;
   // Prompts are shared across modes and prepared from the top-level options.
   scanOptionsByMode?: Partial<
@@ -116,6 +123,9 @@ export interface MultiscanResult {
   resultsPath: string;
   warnings?: { repository: string; warnings: string[] }[];
   policyFailed?: boolean;
+  findingCount?: number;
+  bugFindingCount?: number;
+  bugPriorityCounts?: Record<BugPriority, number>;
 }
 
 export async function runMultiscan(
@@ -261,6 +271,25 @@ async function runCampaign(
         receipt.outputDir === selectedArtifactOutput) &&
       (await hasArtifacts(artifactOutput))
     ) {
+      if (
+        receipt.status !== "failed" &&
+        (receipt.reviewType === "functional_bug" ||
+          (receipt.reviewType === undefined &&
+            (await hasFunctionalBugManifest(artifactOutput)))) &&
+        receipt.bugFindingCount === undefined &&
+        options.recoverScan !== undefined
+      ) {
+        const recovered = await options.recoverScan(artifactOutput, options);
+        if (recovered?.bugFindings != null) {
+          receipt.reviewType = "functional_bug";
+          receipt.findingCount = recovered.bugFindings.findings.length;
+          receipt.bugFindingCount = recovered.bugFindings.findings.length;
+          receipt.bugPriorityCounts = countBugPriorities(
+            recovered.bugFindings.findings,
+          );
+          await appendReceipt(ledger, `${JSON.stringify(receipt)}\n`);
+        }
+      }
       if (receipt.status !== "failed" && receipt.warnings?.length) {
         warnings.push({ repository: task.id, warnings: receipt.warnings });
         for (const warning of receipt.warnings) {
@@ -309,6 +338,7 @@ async function runCampaign(
       failed: 0,
       skipped,
       resultsPath: ledger,
+      ...multiscanFindingSummary(tasks, receipts),
       ...(warnings.length === 0 ? {} : { warnings }),
       ...(hasPolicy ? { policyFailed } : {}),
     };
@@ -346,14 +376,11 @@ async function runCampaign(
         let coverage: CoverageDocument["completeness"] | undefined;
         let cost: Readonly<ScanCost> | null = null;
         let threatModelPath: string | null | undefined;
+        let result: MultiscanScanResult | undefined;
         let exhaustedBudget = false;
         let requiresRecovery = false;
         try {
           await ensureOutputDirectory(artifactRoot);
-          let result:
-            | (Pick<ScanResult, "coverage" | "cost" | "findings"> &
-                Partial<Pick<ScanResult, "threatModelPath">>)
-            | undefined;
           if (options.recoverScan !== undefined && retry === 0 && attempt > 0) {
             const existing = await lstat(scanDir).catch(undefinedIfMissingFile);
             if (existing !== undefined) {
@@ -504,24 +531,49 @@ async function runCampaign(
             protectedRoot,
             signal: options.signal,
           });
-        await appendReceipt(
-          ledger,
-          `${JSON.stringify({
-            ...task,
-            status,
-            attempt,
-            outputDir: scanDir,
-            ...(threatModelPath === null ? {} : { threatModelPath }),
-            ...(coverage === undefined ? {} : { coverage }),
-            ...(cost === null ? {} : { cost }),
-            ...(failure === undefined ? {} : { error: failure }),
-            ...(warning === undefined ? {} : { warning }),
-            ...(runWarnings.length === 0 ? {} : { warnings: runWarnings }),
-            ...(attemptPolicyFailed === undefined
-              ? {}
-              : { policyFailed: attemptPolicyFailed }),
-          })}\n`,
-        );
+        const receipt: MultiscanReceipt = {
+          ...task,
+          status,
+          attempt,
+          outputDir: scanDir,
+          ...(threatModelPath === null ? {} : { threatModelPath }),
+          ...(coverage === undefined ? {} : { coverage }),
+          ...(cost === null ? {} : { cost }),
+          ...(failure === undefined ? {} : { error: failure }),
+          ...(warning === undefined ? {} : { warning }),
+          ...(runWarnings.length === 0 ? {} : { warnings: runWarnings }),
+          ...(attemptPolicyFailed === undefined
+            ? {}
+            : { policyFailed: attemptPolicyFailed }),
+          ...(result === undefined
+            ? {}
+            : {
+                reviewType:
+                  result.reviewType ??
+                  (result.bugFindings != null ? "functional_bug" : "security"),
+              }),
+        };
+        // Finding data is captured after a scan returns. Keep these fields in the
+        // resumable receipt so skipped completed scans contribute to bulk totals.
+        if (result !== undefined) {
+          if (
+            result.reviewType === "functional_bug" ||
+            result.bugFindings != null
+          ) {
+            if (result.bugFindings != null) {
+              receipt.findingCount = result.bugFindings.findings.length;
+              receipt.bugFindingCount = receipt.findingCount;
+              receipt.bugPriorityCounts = countBugPriorities(
+                result.bugFindings.findings,
+              );
+            }
+          } else {
+            const findings = result.findings?.findings;
+            if (Array.isArray(findings)) receipt.findingCount = findings.length;
+          }
+        }
+        await appendReceipt(ledger, `${JSON.stringify(receipt)}\n`);
+        receipts.set(task.id.toLowerCase(), receipt);
         if (
           options.recoverScan !== undefined &&
           failure === undefined &&
@@ -575,9 +627,71 @@ async function runCampaign(
     failed,
     skipped,
     resultsPath: ledger,
+    ...multiscanFindingSummary(tasks, receipts),
     ...(warnings.length === 0 ? {} : { warnings }),
     ...(hasPolicy ? { policyFailed } : {}),
   };
+}
+
+function countBugPriorities(
+  findings: readonly { priority: BugPriority }[],
+): Record<BugPriority, number> {
+  const counts: Record<BugPriority, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const { priority } of findings) counts[priority] += 1;
+  return counts;
+}
+
+function multiscanFindingSummary(
+  tasks: readonly MultiscanTask[],
+  receipts: ReadonlyMap<string, MultiscanReceipt>,
+): Pick<
+  MultiscanResult,
+  "findingCount" | "bugFindingCount" | "bugPriorityCounts"
+> {
+  const successful = tasks.flatMap((task) => {
+    const receipt = receipts.get(task.id.toLowerCase());
+    return receipt !== undefined && receipt.status !== "failed"
+      ? [{ task, receipt }]
+      : [];
+  });
+  const result: Pick<
+    MultiscanResult,
+    "findingCount" | "bugFindingCount" | "bugPriorityCounts"
+  > = {};
+  if (
+    successful.length > 0 &&
+    successful.every(({ receipt }) => receipt.findingCount !== undefined)
+  ) {
+    result.findingCount = successful.reduce(
+      (total, { receipt }) => total + (receipt.findingCount ?? 0),
+      0,
+    );
+  }
+  const bugScans = successful.filter(
+    ({ task, receipt }) =>
+      task.mode === "deep" || receipt.reviewType === "functional_bug",
+  );
+  if (
+    bugScans.length > 0 &&
+    bugScans.every(
+      ({ receipt }) =>
+        receipt.bugFindingCount !== undefined &&
+        receipt.bugPriorityCounts !== undefined,
+    )
+  ) {
+    result.bugFindingCount = bugScans.reduce(
+      (total, { receipt }) => total + (receipt.bugFindingCount ?? 0),
+      0,
+    );
+    result.bugPriorityCounts = { P0: 0, P1: 0, P2: 0, P3: 0 };
+    for (const { receipt } of bugScans) {
+      for (const priority of ["P0", "P1", "P2", "P3"] as const) {
+        result.bugPriorityCounts[priority] +=
+          receipt.bugPriorityCounts?.[priority] ?? 0;
+      }
+    }
+  }
+  return result;
 }
 
 function notifyProgress(
@@ -927,6 +1041,20 @@ async function hasArtifacts(path: string): Promise<boolean> {
       if (!(await lstat(join(path, artifact))).isFile()) return false;
     }
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasFunctionalBugManifest(scanDir: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(
+      await readFile(join(scanDir, "scan-manifest.json"), "utf8"),
+    ) as { documentType?: unknown; scan?: { reviewType?: unknown } };
+    return (
+      manifest.documentType === "functional-bug-scan.scan-manifest" ||
+      manifest.scan?.reviewType === "functional_bug"
+    );
   } catch {
     return false;
   }

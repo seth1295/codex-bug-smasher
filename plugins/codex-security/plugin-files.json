@@ -112,8 +112,6 @@
     "skills/assess-patch-risk/SKILL.md",
     "skills/assess-patch-risk/agents/openai.yaml",
     "skills/assess-patch-risk/references/risk-rubric.md",
-    "skills/deep-security-scan/SKILL.md",
-    "skills/deep-security-scan/agents/openai.yaml",
     "skills/deep-bug-scan/SKILL.md",
     "skills/deep-bug-scan/agents/openai.yaml",
     "skills/define-security-policy/SKILL.md",

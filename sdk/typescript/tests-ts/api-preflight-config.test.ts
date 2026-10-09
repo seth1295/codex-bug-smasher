@@ -173,7 +173,11 @@ describe("CodexSecurity preflight configuration", () => {
           "agents.max_threads=8",
         ],
         error: "agents.max_threads cannot be set",
-        profiles: ["deep_security_scan", "security_diff_scan", "security_scan"],
+        profiles: [
+          "functional_bug_scan",
+          "security_diff_scan",
+          "security_scan",
+        ],
       },
       {
         args: ["--effective-config", "multiagent_config.max_concurrency=8"],
@@ -193,7 +197,7 @@ describe("CodexSecurity preflight configuration", () => {
       }
     }
 
-    for (const profile of ["deep_security_scan", "security_diff_scan"]) {
+    for (const profile of ["functional_bug_scan", "security_diff_scan"]) {
       expect(
         runPreflight(config, profile, [
           "--effective-config",
@@ -342,7 +346,7 @@ describe("CodexSecurity preflight configuration", () => {
     ] as const) {
       const conflictingNativeRuntime = runPreflight(
         config,
-        "deep_security_scan",
+        "functional_bug_scan",
         [
           "--multi-agent-runtime-owner",
           "native",
@@ -368,7 +372,7 @@ describe("CodexSecurity preflight configuration", () => {
       }
     }
 
-    const forged = runPreflight(config, "deep_security_scan", [
+    const forged = runPreflight(config, "functional_bug_scan", [
       "--multi-agent-runtime-owner",
       "codex-bridge",
       "--multi-agent-runtime-provenance",
@@ -377,7 +381,7 @@ describe("CodexSecurity preflight configuration", () => {
     expect(forged.status).toBe(2);
     expect(forged.payload["error"]).toContain("verified-bridge");
 
-    const conflictingBridge = runPreflight(config, "deep_security_scan", [
+    const conflictingBridge = runPreflight(config, "functional_bug_scan", [
       "--multi-agent-runtime-owner",
       "codex-bridge",
       "--multi-agent-runtime-version",

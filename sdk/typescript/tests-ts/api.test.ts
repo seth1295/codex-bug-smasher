@@ -3662,12 +3662,12 @@ describe("CodexSecurity orchestration", () => {
       expect(prompt).not.toContain("$CODEX_SECURITY_SCAN_ID");
       if (mode === "deep") {
         const deepScanArguments = prompt.match(
-          /start_codex_security_deep_scan with (\{[^\n]+\});/,
+          /start_codex_functional_bug_scan with (\{[^\n]+\});/,
         );
         expect(deepScanArguments).not.toBeNull();
         expect(JSON.parse(deepScanArguments![1]!)).toEqual({ scanId });
       } else {
-        expect(prompt).not.toContain("start_codex_security_deep_scan");
+        expect(prompt).not.toContain("start_codex_functional_bug_scan");
       }
       expect(prompt.includes("false_positive_feedback.json")).toBe(
         withFeedback && mode !== "deep",
@@ -5875,7 +5875,7 @@ describe("CodexSecurity orchestration", () => {
     expect(prompt()).toContain("complete_codex_security_scan");
     expect(prompt()).not.toContain("do not finalize or seal them");
     expect(prompt()).toContain(
-      'start_codex_security_deep_scan with {"scanId":"scan_example_001"}',
+      'start_codex_functional_bug_scan with {"scanId":"scan_example_001"}',
     );
     expect(prompt()).not.toContain(
       "This exhaustive scan authorizes the delegated-worker phases",

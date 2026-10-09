@@ -7,7 +7,7 @@ description: Use for a thorough, resumable, multi-worker scan of a repository or
 
 Run a correctness scan with the durable deep-scan coordinator. The coordinator owns the configured independent discovery workers, each investigator subagent allowance, checkpoints, resume, source coverage, validation, counterevidence, deduplication, aggregation, and saved reports. The default is two independent discovery workers and one investigator subagent per worker. Configuration may change those values.
 
-For an SDK or CLI invocation, the scan is already registered. Call `start_codex_security_deep_scan` with its supplied `scanId`. Preserve the requested repository or selected-path scope. Do not edit the scanned repository.
+For an SDK or CLI invocation, the scan is already registered. Call `start_codex_functional_bug_scan` with its supplied `scanId`. Preserve the requested repository or selected-path scope. Do not edit the scanned repository.
 
 Each discovery worker reads `../../references/core-bug-scan.md`, completes an independent review, and saves checkpoints. The reducer combines complete worker results, preserves source references, and deduplicates only defects with the same underlying incorrect behavior where one correction fixes every instance.
 

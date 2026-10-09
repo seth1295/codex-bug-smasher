@@ -4291,7 +4291,9 @@ export async function main(
                 dashboard.showComponents("Combining duplicate findings");
               else
                 errorOutput.write(
-                  "codex-security: Matching component findings by root cause...\n",
+                  settings.mode === "deep"
+                    ? "codex-security: Grouping validated bug findings by fingerprint...\n"
+                    : "codex-security: Matching component findings by root cause...\n",
                 );
             },
             environment: dependencies.environment,
@@ -4307,7 +4309,15 @@ export async function main(
               dashboard?.finishComponents(result);
               stopDashboard();
               errorOutput.write(
-                `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} findings → ${result.findingCount} groups${result.deduplication?.status === "incomplete" ? " (matching incomplete)" : ""}.\nReport: ${errorMessage(result.reportPath)}\n`,
+                result.reviewType === "functional_bug"
+                  ? `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} validated bugs → ${result.findingCount} groups (${Object.entries(
+                      result.priorityCounts ?? {},
+                    )
+                      .map(([priority, count]) => `${priority} ${count}`)
+                      .join(
+                        ", ",
+                      )}).\nReport: ${errorMessage(result.reportPath)}\n`
+                  : `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} findings → ${result.findingCount} groups${result.deduplication?.status === "incomplete" ? " (matching incomplete)" : ""}.\nReport: ${errorMessage(result.reportPath)}\n`,
               );
               if (result.retryPlanPath !== undefined)
                 errorOutput.write(
@@ -4556,6 +4566,12 @@ export async function main(
                       return {
                         coverage: contract.coverage,
                         findings: contract.findings,
+                        ...(contract.bugFindings === undefined
+                          ? {}
+                          : {
+                              bugFindings: contract.bugFindings,
+                              reviewType: "functional_bug" as const,
+                            }),
                         cost:
                           (scan["cost"] as unknown as ScanCost | undefined) ??
                           null,

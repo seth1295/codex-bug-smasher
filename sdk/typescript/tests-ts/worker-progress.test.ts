@@ -366,7 +366,7 @@ describe("worker progress events", () => {
       commandEvent(
         "python3 /plugin/scripts/config_preflight.py",
         JSON.stringify({
-          profile: "deep_security_scan",
+          profile: "functional_bug_scan",
           results: [{ capability: "delegated_workers", status: "pass" }],
         }),
       ),

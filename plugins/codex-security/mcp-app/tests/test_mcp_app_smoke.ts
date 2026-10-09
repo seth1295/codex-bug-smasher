@@ -708,7 +708,7 @@ async function assertDeepScanPersistsRetryableWorkerStartupError() {
     );
 
     deepServer.sendRequest(2, "tools/call", {
-      name: "start_codex_security_deep_scan",
+      name: "start_codex_functional_bug_scan",
       arguments: { targetPath: fixtureTarget },
       _meta: {
         "openai/threadId": "fixture-deep-inventory-thread",
@@ -802,7 +802,7 @@ with sqlite3.connect(sys.argv[1]) as connection:
       4,
       "tools/call",
       {
-        name: "start_codex_security_deep_scan",
+        name: "start_codex_functional_bug_scan",
         arguments: { scanId: scan.scanId },
         _meta: {
           "openai/threadId": "fixture-deep-inventory-thread",
@@ -1523,7 +1523,7 @@ try {
         {
           header: "Deep scan?",
           id: "concurrent_deep_scan",
-          question: "Another Deep Security Scan is running. Continue this one?",
+          question: "Another Deep Bug Scan is running. Continue this one?",
           options: [
             {
               label: "Cancel (Recommended)",
@@ -1712,7 +1712,26 @@ try {
     (tool: { name: string }) => tool.name === "start_codex_security_scan",
   );
   const startDeepScan = toolList.result.tools.find(
-    (tool: { name: string }) => tool.name === "start_codex_security_deep_scan",
+    (tool: { name: string }) => tool.name === "start_codex_functional_bug_scan",
+  );
+  assert.ok(startDeepScan, "the functional bug entrypoint is registered");
+  assert.equal(
+    toolList.result.tools.some(
+      (tool: { name: string }) =>
+        tool.name === "start_codex_security_deep_scan",
+    ),
+    false,
+    "the retired security-named deep alias must not route to bug scans",
+  );
+  const retiredDeepAlias = await requestAndWait(9099, "tools/call", {
+    name: "start_codex_security_deep_scan",
+    arguments: { targetPath: target },
+    _meta: { "openai/threadId": "fixture-thread" },
+  });
+  assert.equal(retiredDeepAlias.result.isError, true);
+  assert.match(
+    retiredDeepAlias.result.content[0].text,
+    /unknown tool|not found/iu,
   );
   const cancel = toolList.result.tools.find(
     (tool: { name: string }) => tool.name === "cancel_codex_security_scan",
@@ -2012,37 +2031,37 @@ try {
   assert.deepEqual(exportFindings._meta.ui.visibility, ["app"]);
   assert.deepEqual(listFindings._meta.ui.visibility, ["app"]);
   const missingDeepIdentity = await requestAndWait(9100, "tools/call", {
-    name: "start_codex_security_deep_scan",
+    name: "start_codex_functional_bug_scan",
     arguments: {},
     _meta: { "openai/threadId": "fixture-thread" },
   });
   assert.equal(missingDeepIdentity.result.isError, true);
   assert.match(
     missingDeepIdentity.result.content[0].text,
-    /exactly one Deep Scan identity/,
+    /exactly one Deep Bug Scan identity/,
   );
   const mixedDeepIdentity = await requestAndWait(9101, "tools/call", {
-    name: "start_codex_security_deep_scan",
+    name: "start_codex_functional_bug_scan",
     arguments: { scanId: randomUUID(), targetPath: target },
     _meta: { "openai/threadId": "fixture-thread" },
   });
   assert.equal(mixedDeepIdentity.result.isError, true);
   assert.match(
     mixedDeepIdentity.result.content[0].text,
-    /exactly one Deep Scan identity/,
+    /exactly one Deep Bug Scan identity/,
   );
   const invalidDeepScope = await requestAndWait(9102, "tools/call", {
-    name: "start_codex_security_deep_scan",
+    name: "start_codex_functional_bug_scan",
     arguments: { targetPath: target, scope: "src" },
     _meta: { "openai/threadId": "fixture-thread" },
   });
   assert.equal(invalidDeepScope.result.isError, true);
   assert.match(
     invalidDeepScope.result.content[0].text,
-    /requires the whole target/,
+    /Deep Bug Scan currently requires the whole target/,
   );
   const missingDeepThread = await requestAndWait(9103, "tools/call", {
-    name: "start_codex_security_deep_scan",
+    name: "start_codex_functional_bug_scan",
     arguments: { targetPath: target },
   });
   assert.equal(missingDeepThread.result.isError, true);
@@ -2051,7 +2070,7 @@ try {
     /owning Codex thread context/,
   );
   const missingPersistedDeepScan = await requestAndWait(9104, "tools/call", {
-    name: "start_codex_security_deep_scan",
+    name: "start_codex_functional_bug_scan",
     arguments: { scanId: randomUUID() },
     _meta: {
       "openai/threadId": "fixture-thread",
@@ -2074,7 +2093,7 @@ try {
   );
   assert.match(
     missingPersistedDeepScanText,
-    /Do not call start_codex_security_deep_scan again/,
+    /Do not call start_codex_functional_bug_scan again/,
   );
   assert.match(missingPersistedDeepScanText, /get_codex_security_scan_context/);
   assert.match(missingPersistedDeepScanText, /complete_codex_security_scan/);

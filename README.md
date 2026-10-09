@@ -37,7 +37,9 @@ node sdk/typescript/bin/codex-security.mjs scan /path/to/repository --mode deep 
 ```
 
 The scan uses the Codex login already available on the machine. Deep bug scans
-do not require an API key, Docker, or a hosted scanner service.
+do not require an API key, Docker, or a hosted scanner service. A report with no
+validated bugs means the scan did not establish a defect in its reviewed scope;
+review the saved coverage and deferred work as well.
 
 ### Scan options
 

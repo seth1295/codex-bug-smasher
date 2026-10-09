@@ -127,12 +127,24 @@ directory must be private to you (`chmod 700`).
 | `cost`                            | Estimated model usage cost, or `null` when unavailable.          |
 
 Review coverage alongside findings. A report with no findings does not establish
-that the repository is secure. Reports and logs can contain source code,
+that the repository has no defects or security issues. Reports and logs can contain source code,
 vulnerability details, and credentials; review them before sharing.
 
 The SDK does not set your process's exit status. Use `hasFindingsAtOrAbove()`
 for Standard scan severity thresholds, or `hasBugsAtOrAbove("P1")` for Deep
 scan bug priority. Deep scans do not modify the repository.
+
+Start a functional bug scan with `mode: "deep"`; read confirmed bugs from
+`bugFindings.findings` and keep its P0–P3 priorities separate from security
+severity:
+
+```ts
+const result = await security.run("/path/to/repository", { mode: "deep" });
+
+for (const bug of result.bugFindings?.findings ?? []) {
+  console.log(bug.priority, bug.title, bug.locations);
+}
+```
 
 ### Scan options and output
 

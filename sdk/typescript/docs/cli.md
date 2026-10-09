@@ -428,6 +428,13 @@ severity. Uncertain matches stay separate. `summary.json` records coverage and
 matching status; `report.md` links to component reports. Export or publish each
 individual scan folder.
 
+When the shared settings select Deep mode, the combined artifact uses the
+`functional-bug-scan.component-findings` contract. It groups only findings with
+the same functional-bug fingerprint, keeps the highest P0–P3 priority, merges
+source locations and validation evidence, and leaves unvalidated hypotheses in
+their own section. `summary.json` and `report.md` include distinct bug totals and
+priority counts without converting them to security severities.
+
 Failures do not stop other components. Failed scans, incomplete coverage, or
 failed matching return `2`; severity-policy violations return `1`. Retry with
 `--components-file retry-components.json` and a new empty output directory.
@@ -653,6 +660,13 @@ attempt per pending repository per invocation. Repeating the command continues
 the campaign, skips completed results, and starts pending attempts. Occupied
 attempt directories stop that repository and suggest `--recover`.
 Changed project configuration requires a new output directory.
+
+Deep bug scans add `reviewType`, `findingCount`, `bugFindingCount`, and
+`bugPriorityCounts` to each completed receipt in `results.jsonl`. The JSON
+campaign summary includes the validated bug total and P0–P3 counts when all
+completed Deep scans have typed findings receipts. A skipped receipt written by
+an earlier version can be refreshed from its sealed functional-bug findings
+artifact during `--recover`.
 
 ### Recovering failed or interrupted bulk scans
 

@@ -1093,7 +1093,7 @@ async function testParentToolList(bundle: string) {
     }
 
     const deepScanTool = tools.find(
-      (tool) => tool.name === "start_codex_security_deep_scan",
+      (tool) => tool.name === "start_codex_functional_bug_scan",
     );
     assert.ok(
       deepScanTool,

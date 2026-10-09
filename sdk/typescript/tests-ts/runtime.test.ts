@@ -549,7 +549,7 @@ describe("plugin runtime preparation", () => {
       "open_codex_security_workspace",
       "start_codex_security_standard_scan",
       "start_codex_security_prompt_only_scan",
-      "start_codex_security_deep_scan",
+      "start_codex_functional_bug_scan",
       "record_codex_security_scan_draft",
       "record_candidate_attack_paths",
       "complete_codex_security_scan",
@@ -4693,7 +4693,7 @@ describe("runtime directories and plugin Python boundary", () => {
     for (const profile of [
       "security_diff_scan",
       "security_scan",
-      "deep_security_scan",
+      "functional_bug_scan",
     ]) {
       const result = spawnSync(
         python!,
@@ -4718,7 +4718,7 @@ describe("runtime directories and plugin Python boundary", () => {
         unknown: { capability: string; severity: string }[];
       };
       expect(payload.status).toBe("ready");
-      if (profile === "deep_security_scan") {
+      if (profile === "functional_bug_scan") {
         expect(payload.results).toEqual([]);
         expect(payload.unknown).toEqual([]);
         continue;

@@ -79,16 +79,18 @@ def test_config_falls_back_to_tomli_without_stdlib_tomllib(monkeypatch, script, 
 
 def test_capability_profiles_parse_and_route_top_level_scan_skills() -> None:
     data = tomllib.loads((PLUGIN_ROOT / "preflight" / "capability-profiles.toml").read_text())
+    plugin_files = json.loads((PLUGIN_ROOT / "plugin-files.json").read_text())
 
     assert data["version"] == 1
+    assert not any(
+        "deep-security-scan" in path for path in plugin_files["shippedExact"]
+    )
     assert set(data["profiles"]) == {
-        "deep_security_scan",
         "functional_bug_scan",
         "security_diff_scan",
         "security_scan",
     }
     assert {route["skill"]: route["profile"] for route in data["routes"]} == {
-        "deep-security-scan": "deep_security_scan",
         "deep-bug-scan": "functional_bug_scan",
         "security-diff-scan": "security_diff_scan",
         "security-scan": "security_scan",
@@ -97,7 +99,7 @@ def test_capability_profiles_parse_and_route_top_level_scan_skills() -> None:
 
 def test_standard_and_deep_scan_profiles_do_not_require_goals() -> None:
     data = tomllib.loads((PLUGIN_ROOT / "preflight" / "capability-profiles.toml").read_text())
-    for profile_id in ("security_scan", "deep_security_scan", "functional_bug_scan"):
+    for profile_id in ("security_scan", "functional_bug_scan"):
         profile = data["profiles"][profile_id]
         requirements = {requirement["capability"] for requirement in profile["requirements"]}
         assert requirements.isdisjoint({"goal_tools", "goals_enabled"})
@@ -105,7 +107,6 @@ def test_standard_and_deep_scan_profiles_do_not_require_goals() -> None:
             patch["path"] == "features.goals"
             for patch in profile.get("remediation", {}).get("patches", [])
         )
-    assert data["profiles"]["deep_security_scan"]["requirements"] == []
     assert data["profiles"]["functional_bug_scan"]["requirements"] == []
     assert {
         requirement["capability"]
@@ -117,7 +118,7 @@ def test_deep_scan_does_not_add_capability_requirements_beyond_standard_scan() -
     data = tomllib.loads((PLUGIN_ROOT / "preflight" / "capability-profiles.toml").read_text())
     deep_requirements = {
         requirement["capability"]
-        for requirement in data["profiles"]["deep_security_scan"]["requirements"]
+        for requirement in data["profiles"]["functional_bug_scan"]["requirements"]
     }
     standard_requirements = {
         requirement["capability"]
@@ -204,7 +205,7 @@ def test_deep_scan_preflight_is_ready_with_required_capabilities(tmp_path: Path)
 
     payload = json.loads(result.stdout)
     assert result.returncode == 0
-    assert payload["profile"] == "deep_security_scan"
+    assert payload["profile"] == "functional_bug_scan"
     assert payload["status"] == "ready"
     assert payload["failed"] == []
     assert payload["unknown"] == []
@@ -214,7 +215,7 @@ def test_standard_and_deep_preflight_do_not_probe_goal_tools(tmp_path: Path) -> 
     config_path = tmp_path / "config.toml"
     config_path.write_text("[features]\ngoals = false\n")
 
-    for profile in ("security_scan", "deep_security_scan"):
+    for profile in ("security_scan", "functional_bug_scan"):
         result = run_preflight(
             "--profile",
             profile,
@@ -241,7 +242,7 @@ def test_deep_preflight_compatibility_profile_has_no_runtime_requirements(tmp_pa
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
     )
@@ -260,7 +261,7 @@ def test_deep_preflight_ignores_unrelated_bridge_backend_configuration(tmp_path:
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
     )
@@ -277,7 +278,7 @@ def test_deep_scan_preflight_accepts_native_v1_with_legacy_thread_limits(tmp_pat
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -308,7 +309,7 @@ def test_deep_scan_preflight_accepts_model_selected_v2_with_legacy_thread_limits
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -356,7 +357,7 @@ def test_deep_scan_preflight_does_not_require_available_skill_enumeration(tmp_pa
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -379,7 +380,7 @@ def test_deep_scan_preflight_does_not_block_on_partial_skill_enumeration(tmp_pat
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -1189,7 +1190,7 @@ def test_deep_scan_preflight_accepts_native_v2_without_parent_slots(tmp_path: Pa
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -1220,7 +1221,7 @@ def test_model_selected_native_v2_does_not_require_observed_parent_cap(tmp_path:
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--multi-agent-runtime-owner",
@@ -1250,7 +1251,7 @@ def test_deep_scan_preflight_does_not_require_verified_parent_runtime_owner(tmp_
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--multi-agent-runtime-version",
@@ -1288,7 +1289,7 @@ def test_preflight_rejects_native_v2_agents_max_threads_conflict(tmp_path: Path)
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
     )
@@ -1465,7 +1466,7 @@ def test_deep_scan_preflight_accepts_verified_bridge_owned_runtime(tmp_path: Pat
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--effective-config",
@@ -1501,7 +1502,7 @@ def test_deep_scan_preflight_accepts_native_v2_from_static_config(tmp_path: Path
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",
@@ -1526,7 +1527,7 @@ def test_deep_scan_bridge_mode_omits_inapplicable_native_remediation(tmp_path: P
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--effective-config",
@@ -1560,7 +1561,7 @@ def test_deep_scan_preflight_omits_concurrency_patch_when_mode_is_unknown(
 
     result = run_preflight(
         "--profile",
-        "deep_security_scan",
+        "functional_bug_scan",
         "--config",
         str(config_path),
         "--runtime-check",

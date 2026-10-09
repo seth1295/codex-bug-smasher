@@ -1,7 +1,7 @@
 {
   "name": "codex-security",
   "version": "0.1.95",
-  "description": "Codex Security workflows for security scans, analysis, and investigation.",
+  "description": "Codex Security workflows plus resumable deep functional bug scans.",
   "author": {
     "name": "OpenAI"
   },
@@ -10,6 +10,7 @@
   "license": "Apache-2.0",
   "keywords": [
     "security",
+    "functional-bug-scan",
     "code-review",
     "diff-review",
     "appsec",
@@ -21,7 +22,7 @@
   "interface": {
     "displayName": "Codex Security",
     "shortDescription": "Security scanning for your codebase",
-    "longDescription": "Codex Security packages reusable workflows for security scans, analysis, validation, and investigation across code, diffs, and related artifacts.",
+    "longDescription": "Codex Security packages reusable workflows for security scans, analysis, validation, and investigation, plus resumable deep functional bug scans across code repositories and selected paths.",
     "developerName": "OpenAI",
     "category": "Security",
     "capabilities": ["Interactive", "Read", "Write"],
@@ -29,6 +30,7 @@
     "privacyPolicyURL": "https://openai.com/policies/row-privacy-policy/",
     "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
     "defaultPrompt": [
+      "Run a deep functional bug scan on this repository.",
       "Run a Codex Security scan on this repository.",
       "Run a Codex Security diff scan on this PR, commit, branch diff, or working-tree patch.",
       "Triage existing security findings against this repository."

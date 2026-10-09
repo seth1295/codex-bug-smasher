@@ -2727,14 +2727,30 @@ def scan_result(
                     Path(scan["scan_dir"]), None, "saved functional bug scan"
                 )
                 verify_manifest_binding(scan, manifest)
-    occurrence_rows = scan_history.finding_occurrence_rows(
-        connection, scan["id"], offset=0, limit=FINDINGS_RESULT_LIMIT
-    )
-    if occurrence_id is not None and all(row["id"] != occurrence_id for row in occurrence_rows):
-        occurrence = require_occurrence(connection, occurrence_id)
-        if occurrence["scan_id"] != scan["id"]:
-            raise SystemExit("This finding does not belong to the selected scan.")
-        occurrence_rows.append(occurrence)
+    selected_bug: dict[str, Any] | None = None
+    if bug_findings_document is not None and occurrence_id is not None:
+        selected_bug = next(
+            (
+                bug
+                for bug in bug_findings_document["findings"]
+                if bug["occurrenceId"] == occurrence_id
+            ),
+            None,
+        )
+        if selected_bug is None:
+            raise SystemExit("The requested finding was not found in the selected scan.")
+        occurrence_rows: list[sqlite3.Row] = []
+    else:
+        occurrence_rows = scan_history.finding_occurrence_rows(
+            connection, scan["id"], offset=0, limit=FINDINGS_RESULT_LIMIT
+        )
+        if occurrence_id is not None and all(
+            row["id"] != occurrence_id for row in occurrence_rows
+        ):
+            occurrence = require_occurrence(connection, occurrence_id)
+            if occurrence["scan_id"] != scan["id"]:
+                raise SystemExit("This finding does not belong to the selected scan.")
+            occurrence_rows.append(occurrence)
     relations = scan_history.finding_relations(
         connection, scan["id"], (row["id"] for row in occurrence_rows)
     )
@@ -2749,7 +2765,12 @@ def scan_result(
             priority = bug["priority"]
             priority_counts[priority] = priority_counts.get(priority, 0) + 1
         indexed_findings: list[dict[str, Any]] = []
-        for bug in bugs[:FINDINGS_RESULT_LIMIT]:
+        selected_bugs = (
+            [selected_bug]
+            if selected_bug is not None
+            else bugs[:FINDINGS_RESULT_LIMIT]
+        )
+        for bug in selected_bugs:
             indexed_findings.append(
                 {
                     "findingId": bug["findingId"],

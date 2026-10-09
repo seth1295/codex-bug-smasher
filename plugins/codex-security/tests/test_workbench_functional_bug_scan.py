@@ -138,6 +138,31 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
     assert saved_findings["findings"][0]["validation"]["status"] == "validated"
     assert not {"severity", "taxonomy", "attackPath"}.intersection(saved_findings["findings"][0])
     assert len(saved_findings["hypotheses"]) == 1
+    occurrence_id = saved_findings["findings"][0]["occurrenceId"]
+    selected = run_workbench(
+        state_dir,
+        "get-scan",
+        "--scan-id",
+        scan_id,
+        "--occurrence-id",
+        occurrence_id,
+    )["scan"]
+    assert selected["findingCount"] == 1
+    assert selected["findings"] == selected["bugs"]
+    assert selected["findings"][0]["occurrenceId"] == occurrence_id
+    assert selected["priorityCounts"] == {"P1": 1}
+    assert "severityCounts" not in selected
+    missing = run_workbench(
+        state_dir,
+        "get-scan",
+        "--scan-id",
+        scan_id,
+        "--occurrence-id",
+        "occurrence-from-another-scan",
+        check=False,
+    )
+    assert missing["returncode"] != 0
+    assert "not found in the selected scan" in str(missing["stderr"])
     with sqlite3.connect(state_dir / "workbench.sqlite3") as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM finding_occurrences WHERE scan_id = ?", (scan_id,)

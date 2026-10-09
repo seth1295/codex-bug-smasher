@@ -4000,7 +4000,7 @@ function scanPrompt(
       : []),
     ...(mode === "deep"
       ? [
-          `The SDK has already registered this scan. Call start_codex_security_deep_scan with ${JSON.stringify({ scanId })}; never pass targetPath or create another scan.`,
+          `The SDK has already registered this scan. Call start_codex_functional_bug_scan with ${JSON.stringify({ scanId })}; never pass targetPath or create another scan.`,
         ]
       : skillName === "security-scan" || customValidation
         ? [
