@@ -5,19 +5,27 @@ import type { CandidateValidationRecord } from "../src/artifact-validation-phase
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importSource } from "./import-module.ts";
 
 const {
   candidateAttackPathsInputSchema,
   recordCodexSecurityCandidateAttackPaths,
 } = await importSource(
-  new URL("../src/artifact-attack-path.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-attack-path.ts", import.meta.url)),
 );
 
 const scanId = "11111111-1111-4111-8111-111111111111";
 const temporaryDirectories = createTemporaryDirectories(true);
 
 try {
+  await assert.rejects(
+    recordCodexSecurityCandidateAttackPaths(
+      { root: "/scan", repoRoot: "/repo", layout: "scan", mode: "deep" },
+      { attackPaths: [] },
+    ),
+    /Attack-path analysis is unavailable during functional bug scans/,
+  );
   await testSchemaMatchesDocumentedAttackPathDecisions();
   await testEligibleRowsKeepDiscoveryValidationAndOrder();
   await testUnknownAndDuplicateCandidatesDoNotChangeLedger();

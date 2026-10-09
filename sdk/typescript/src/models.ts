@@ -1,6 +1,6 @@
 /* Generated from the plugin JSON Schemas. Run `pnpm generate:models`. */
 
-export interface ScanManifest {
+export interface SecurityScanManifest {
   documentType: "codex-security.scan-manifest";
   schemaVersion: "1.0";
   scan: {
@@ -84,7 +84,61 @@ export interface ScanManifest {
   [k: string]: unknown;
 }
 
-export interface FindingsDocument {
+export interface FunctionalBugScanManifest {
+  documentType: "functional-bug-scan.scan-manifest";
+  schemaVersion: "1.0";
+  scan: {
+    id: string;
+    producer: {
+      name: "functional-bug-scan-plugin";
+      version: string;
+      [k: string]: unknown;
+    };
+    status: "completed" | "failed" | "canceled" | "interrupted";
+    startedAt: string;
+    completedAt: string;
+    sealedAt: string;
+    reviewType: "functional_bug";
+    threatModel?: never;
+    hardening?: never;
+    target: {
+      kind: "git_revision" | "git_worktree" | "git_diff" | "directory_snapshot";
+      targetId: string;
+      displayName: string;
+      remote?: string;
+      revision?: string;
+      baseRevision?: string;
+      headRevision?: string;
+      snapshotDigest?: string;
+      [k: string]: unknown;
+    };
+    scope: {
+      includePaths: string[];
+      excludePaths: string[];
+      summary?: string;
+      artifactsReviewed?: string[];
+      runtimeStatus?: string;
+      validationMode?: string;
+      context?: string;
+      limitations?: string[];
+      [k: string]: unknown;
+    };
+    coverageRef: "coverage.json";
+    findingsRef: "findings.json";
+    /**
+     * @minItems 1
+     */
+    artifacts: {
+      path: string;
+      sha256: string;
+      mediaType: string;
+      [k: string]: unknown;
+    }[];
+    [k: string]: unknown;
+  };
+}
+
+export interface SecurityFindingsDocument {
   documentType: "codex-security.findings";
   schemaVersion: "1.0";
   scanId: string;
@@ -288,7 +342,92 @@ export interface FindingsDocument {
   [k: string]: unknown;
 }
 
-export interface CoverageDocument {
+export interface FunctionalBugFindingsDocument {
+  documentType: "functional-bug-scan.findings";
+  schemaVersion: "1.0";
+  scanId: string;
+  findings: {
+    findingId: string;
+    occurrenceId: string;
+    ruleId: string;
+    identity: {
+      anchor: string;
+      instance?: string;
+      [k: string]: unknown;
+    };
+    fingerprints: {
+      algorithm: "functional-bug/v1";
+      primary: string;
+      [k: string]: unknown;
+    };
+    title: string;
+    summary: string;
+    priority: "P0" | "P1" | "P2" | "P3";
+    category: string;
+    confidence: {
+      level: "high" | "medium" | "low";
+      rationale: string;
+      [k: string]: unknown;
+    };
+    /**
+     * @minItems 1
+     */
+    locations: {
+      path: string;
+      startLine: number;
+      endLine?: number;
+      [k: string]: unknown;
+    }[];
+    expected: string;
+    actual: string;
+    impact: string;
+    rootCause?: string;
+    reachability?:
+      | string
+      | {
+          entrypoint?: string;
+          steps?: string[];
+          preconditions?: string[];
+          [k: string]: unknown;
+        };
+    validation: {
+      status: "validated";
+      method: string;
+      /**
+       * @minItems 1
+       */
+      evidence: string[];
+      reproduction?: string[];
+      counterEvidence?: string[];
+      limitations?: string[];
+      [k: string]: unknown;
+    };
+    suggestedCorrection?: string;
+    tests?: string[];
+    provenance: {
+      source: string;
+      sourceFindingIds?: string[];
+      sourceFindings?: {
+        id: string;
+        finding: {
+          [k: string]: unknown;
+        };
+      }[];
+      [k: string]: unknown;
+    };
+    extensions?: {
+      [k: string]: unknown;
+    };
+  }[];
+  /**
+   * Unresolved candidate bugs, separate from validated findings.
+   */
+  hypotheses: {
+    [k: string]: unknown;
+  }[];
+}
+
+export interface SecurityCoverageDocument {
   documentType: "codex-security.coverage";
   schemaVersion: "1.0";
   scanId: string;
@@ -346,6 +485,54 @@ export interface CoverageDocument {
   [k: string]: unknown;
 }
 
+export interface FunctionalBugCoverageDocument {
+  documentType: "functional-bug-scan.coverage";
+  schemaVersion: "1.0";
+  scanId: string;
+  mode: "repository" | "scoped_path" | "deep_repository";
+  completeness: "complete" | "partial" | "unknown";
+  includePaths: string[];
+  excludePaths: string[];
+  inventoryStrategy: string;
+  reviewedAreas: {
+    label: string;
+    disposition: "reviewed" | "follow_up" | "excluded";
+    paths?: string[];
+    sourceWorkerIds?: string[];
+    notes?: string;
+  }[];
+  surfaces?: never;
+  receiptRefs?: never;
+  explicitExclusions: {
+    pattern: string;
+    reason: string;
+    [k: string]: unknown;
+  }[];
+  deferred: {
+    [k: string]: unknown;
+  }[];
+  openQuestions?: (
+    | string
+    | {
+        question: string;
+        followUpPrompt?: string;
+        [k: string]: unknown;
+      }
+  )[];
+}
+
+export type ScanManifest = SecurityScanManifest;
+
+export type FindingsDocument = SecurityFindingsDocument;
+
+export type CoverageDocument = SecurityCoverageDocument;
+
+export type BugScanManifest = FunctionalBugScanManifest;
+
+export type BugFindingsDocument = FunctionalBugFindingsDocument;
+
+export type BugCoverageDocument = FunctionalBugCoverageDocument;
+
 export type ContractObject = Record<string, unknown>;
 
 export type ScanRecord = ScanManifest["scan"];
@@ -358,13 +545,21 @@ export type TargetKind = ScanTargetRecord["kind"];
 
 export type ScanScope = ScanRecord["scope"];
 
-export type ThreatModel = NonNullable<ScanRecord["threatModel"]>;
+export type ThreatModel = NonNullable<
+  SecurityScanManifest["scan"]["threatModel"]
+>;
 
-export type ScanHardening = NonNullable<ScanRecord["hardening"]>;
+export type ScanHardening = NonNullable<
+  SecurityScanManifest["scan"]["hardening"]
+>;
 
 export type ScanArtifact = ScanRecord["artifacts"][number];
 
-export type Finding = FindingsDocument["findings"][number];
+export type Finding = SecurityFindingsDocument["findings"][number];
+
+export type BugFinding = FunctionalBugFindingsDocument["findings"][number];
+
+export type BugPriority = BugFinding["priority"];
 
 export type FindingIdentity = Finding["identity"];
 
@@ -410,14 +605,18 @@ export type CoverageCompleteness = CoverageDocument["completeness"];
 
 export type InventoryStrategy = CoverageDocument["inventoryStrategy"];
 
-export type CoverageSurface = CoverageDocument["surfaces"][number];
+export type CoverageSurface = SecurityCoverageDocument["surfaces"][number];
+
+export type BugReviewedArea =
+  FunctionalBugCoverageDocument["reviewedAreas"][number];
 
 export type SurfaceDisposition = CoverageSurface["disposition"];
 
-export type ExplicitExclusion = CoverageDocument["explicitExclusions"][number];
+export type ExplicitExclusion =
+  SecurityCoverageDocument["explicitExclusions"][number];
 
-export type DeferredCoverage = CoverageDocument["deferred"][number];
+export type DeferredCoverage = SecurityCoverageDocument["deferred"][number];
 
 export type CoverageOpenQuestion = NonNullable<
-  CoverageDocument["openQuestions"]
+  SecurityCoverageDocument["openQuestions"]
 >[number];

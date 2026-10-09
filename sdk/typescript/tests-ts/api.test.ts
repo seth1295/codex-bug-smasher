@@ -876,8 +876,8 @@ describe("CodexSecurity orchestration", () => {
       repository,
       target: { kind: "paths", paths: ["src"] },
       mode: "deep",
-      workers: 4,
-      subagents: 3,
+      workers: 2,
+      subagents: 1,
       stopAfterNoNew: 4,
       stopAfterConsecutiveErrors: 3,
       maxDiscoveryRuns: 40,
@@ -1064,6 +1064,24 @@ describe("CodexSecurity orchestration", () => {
     await expect(client.preflight(repository, { workers: 1 })).rejects.toThrow(
       "Deep scan settings require deep mode",
     );
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        cyberAccessProgram: "standard",
+      }),
+    ).rejects.toThrow("cyberAccessProgram is a security-only setting");
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        postScanPromptFile: join(root, "unused-post-scan.md"),
+      }),
+    ).rejects.toThrow("postScanPromptFile are not supported");
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        validationPromptFile: join(root, "unused-validation.md"),
+      }),
+    ).rejects.toThrow("Custom validation prompts are not supported");
     await expect(
       client.preflight(repository, { maxTimeHours: 1.5 }),
     ).rejects.toThrow("Deep scan settings require deep mode");
@@ -2943,8 +2961,8 @@ describe("CodexSecurity orchestration", () => {
       expect(
         parseToml(await readFile(runtimeConfig, "utf8"))["deep_scan"],
       ).toEqual({
-        workers: 4,
-        subagents: 3,
+        workers: 2,
+        subagents: 1,
         stop_after_no_new: 4,
         stop_after_consecutive_errors: 3,
         max_discovery_runs: 40,
@@ -3634,7 +3652,7 @@ describe("CodexSecurity orchestration", () => {
         expect(prompt).not.toContain("start_codex_security_deep_scan");
       }
       expect(prompt.includes("false_positive_feedback.json")).toBe(
-        withFeedback,
+        withFeedback && mode !== "deep",
       );
       await client.close();
     },
@@ -5835,7 +5853,7 @@ describe("CodexSecurity orchestration", () => {
     await expect(client.run(repository, { mode: "deep" })).rejects.toThrow(
       "prompt captured",
     );
-    expect(prompt()).toContain("$codex-security:deep-security-scan");
+    expect(prompt()).toContain("$codex-security:deep-bug-scan");
     expect(prompt()).not.toContain("record_codex_security_scan_draft");
     expect(prompt()).toContain("complete_codex_security_scan");
     expect(prompt()).not.toContain("do not finalize or seal them");

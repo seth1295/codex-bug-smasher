@@ -2103,6 +2103,111 @@ The extraction root is not enforced.
         second = FINALIZER._fingerprint("target_sha256_example", sibling)
         self.assertNotEqual(first, second)
 
+    def test_functional_bug_recovery_preserves_coverage_and_seals_report(self) -> None:
+        self.write_json(
+            "scan-manifest.json",
+            {
+                "scan": {
+                    "id": "bug_scan_001",
+                    "producer": {"name": "functional-bug-scan-plugin", "version": "1.0.0"},
+                    "status": "completed",
+                    "startedAt": "2026-10-09T00:00:00Z",
+                    "completedAt": "2026-10-09T00:05:00Z",
+                    "reviewType": "functional_bug",
+                    "target": {
+                        "kind": "git_worktree",
+                        "targetId": "target_sha256_bug_fixture",
+                        "displayName": "invoice-fixture",
+                        "snapshotDigest": ("codex-security-snapshot/v1:sha256:" + "1" * 64),
+                    },
+                    "scope": {"includePaths": ["src/"], "excludePaths": []},
+                }
+            },
+        )
+        candidate = {
+            "ruleId": "invoice.proration-rounding",
+            "identity": {"anchor": "invoice-proration-rounding"},
+            "title": "Proration rounds down too early",
+            "summary": "The calculation truncates the ratio before applying it to the amount.",
+            "priority": "P1",
+            "category": "algorithm",
+            "confidence": {
+                "level": "high",
+                "rationale": "A deterministic input demonstrates the wrong total.",
+            },
+            "locations": [{"path": "src/invoice.py", "startLine": 4}],
+            "expected": "Prorating 500 cents at 40 percent returns 200 cents.",
+            "actual": "Integer division evaluates the ratio to zero and returns 0 cents.",
+            "impact": "Invoice adjustments can undercharge a customer.",
+            "validation": {
+                "status": "validated",
+                "method": "A focused deterministic reproduction against the function.",
+                "evidence": ["prorate(500, 2, 5) returned 0 instead of 200"],
+                "reproduction": ["Call prorate(500, 2, 5)."],
+                "counterEvidence": ["The zero amount case is expected to return zero."],
+            },
+            "suggestedCorrection": "Multiply before dividing and define the rounding rule explicitly.",
+            "tests": ["Add a test for a fractional ratio and a nonzero amount."],
+            "provenance": {"source": "local_plugin"},
+        }
+        coverage = {
+            "documentType": "functional-bug-scan.coverage",
+            "schemaVersion": "1.0",
+            "scanId": "bug_scan_001",
+            "mode": "deep_repository",
+            "completeness": "complete",
+            "inventoryStrategy": "repository",
+            "includePaths": ["src/"],
+            "excludePaths": [],
+            "surfaces": [{"label": "Invoice arithmetic", "disposition": "unknown"}],
+            "explicitExclusions": [],
+            "deferred": [
+                {
+                    "id": "unresolved-race",
+                    "candidate": {"title": "Possible concurrent overwrite"},
+                    "reason": "The call ordering could not be established from available evidence.",
+                }
+            ],
+        }
+        self.write_json(
+            "findings.json",
+            {
+                "documentType": "functional-bug-scan.findings",
+                "schemaVersion": "1.0",
+                "scanId": "bug_scan_001",
+                "findings": [candidate],
+                "hypotheses": [],
+            },
+        )
+        self.write_json("coverage.json", coverage)
+        warnings: list[str] = []
+
+        prepared = FINALIZER._prepare_scan_finalization(
+            self.scan_dir,
+            completion_warnings=warnings,
+        )
+        FINALIZER._write_prepared_scan_finalization(prepared)
+
+        manifest = self.read_json("scan-manifest.json")
+        findings = self.read_json("findings.json")
+        recovered_coverage = self.read_json("coverage.json")
+        report = (self.scan_dir / "report.md").read_text(encoding="utf-8")
+        self.assertEqual(manifest["documentType"], "functional-bug-scan.scan-manifest")
+        self.assertEqual(findings["documentType"], "functional-bug-scan.findings")
+        self.assertEqual(findings["findings"][0]["priority"], "P1")
+        self.assertEqual(findings["findings"][0]["validation"]["status"], "validated")
+        self.assertEqual(len(findings["hypotheses"]), 1)
+        self.assertEqual(recovered_coverage["completeness"], "partial")
+        self.assertEqual(recovered_coverage["reviewedAreas"][0]["disposition"], "follow_up")
+        self.assertEqual(recovered_coverage["deferred"][0]["id"], "unresolved-race")
+        self.assertTrue(
+            any("functional bug review area 1" in warning.lower() for warning in warnings)
+        )
+        self.assertIn("Functional Bug Report", report)
+        self.assertIn("Unvalidated hypotheses", report)
+        self.assertIn("P1", report)
+        self.assertNotIn("CWE", report)
+
     def test_dirty_worktree_snapshot_does_not_change_logical_fingerprint(self) -> None:
         target = self.manifest["scan"]["target"]
         FINALIZER._validate_target(target)

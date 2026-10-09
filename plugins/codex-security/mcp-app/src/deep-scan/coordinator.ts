@@ -284,19 +284,10 @@ export class DeepScanCoordinator {
       const schedulerResult = await this.runScheduler();
       if (this.canceled || this.externallyFailed) return;
       const draft = schedulerResult.result
-        ? {
-            ...structuredClone(schedulerResult.result),
-            // Readers require coverage.json. The coordinator has accepted this
-            // result, so mark it complete and leave review notes empty.
-            coverage: {
-              completeness: "complete",
-              surfaces: [],
-              explicitExclusions: [],
-              deferred: [],
-            },
-          }
+        ? deepBugDraft(schedulerResult.result)
         : scanDraftInputSchema.parse({
             scanId: this.state.scanId,
+            reviewType: "functional_bug",
             findings: [],
             coverage: {
               completeness: "partial",
@@ -917,7 +908,7 @@ export class DeepScanCoordinator {
       !(this.discoveryDeadlineReached && acceptedCount === 0)
     ) {
       throw new Error(
-        "Deep Scan ended without a successfully reduced Standard scan.",
+        "Deep Bug Scan ended without a successfully reduced worker result.",
       );
     }
     return {
@@ -1084,6 +1075,38 @@ export class DeepScanCoordinator {
       }
     }
   }
+}
+
+function deepBugDraft(result: NonNullable<SchedulerResult["result"]>): ScanDraftInput {
+  const { scanCoverage, ...semantic } = structuredClone(result);
+  const coverage = scanCoverage ?? {};
+  const surfaces = Array.isArray(coverage.surfaces) ? coverage.surfaces : [];
+  const deferred = Array.isArray(coverage.deferred) ? coverage.deferred : [];
+  const partial =
+    coverage.completeness !== undefined && coverage.completeness !== "complete" ||
+    deferred.length > 0 ||
+    surfaces.some(
+      (surface) =>
+        surface &&
+        typeof surface === "object" &&
+        "disposition" in surface &&
+        surface.disposition === "needs_follow_up",
+    );
+  return {
+    ...semantic,
+    reviewType: "functional_bug",
+    coverage: {
+      completeness: partial ? "partial" : "complete",
+      surfaces: structuredClone(surfaces),
+      explicitExclusions: Array.isArray(coverage.explicitExclusions)
+        ? structuredClone(coverage.explicitExclusions)
+        : [],
+      deferred: structuredClone(deferred),
+      ...(Array.isArray(coverage.openQuestions)
+        ? { openQuestions: structuredClone(coverage.openQuestions) }
+        : {}),
+    },
+  };
 }
 
 const systemClock: DeepScanClock = {

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { importSource } from "./import-module.ts";
 
 const { CODEX_SANDBOX_STATE_META_CAPABILITY, resolveDeepWorkerParentSandbox } =
@@ -116,16 +118,14 @@ assert.throws(
     /symbolic project-roots denial metadata/i.test(error.message),
 );
 
-const pinnedFileUri = extra(
-  pinnedReadOnly,
-  "file:///tmp/codex-security-parent",
-);
+const parentDirectory = path.join(tmpdir(), "codex-security-parent");
+const pinnedFileUri = extra(pinnedReadOnly, pathToFileURL(parentDirectory).href);
 assert.deepEqual(resolveDeepWorkerParentSandbox(pinnedFileUri), {
   filesystemDenies: [],
 });
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
-    extra(pinnedReadOnly, "/tmp/codex-security-parent"),
+    extra(pinnedReadOnly, parentDirectory),
   ),
   {
     filesystemDenies: [],
@@ -150,7 +150,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
-    extra(pinnedReadOnly, "file:///tmp/codex-security-parent", {
+    extra(pinnedReadOnly, pathToFileURL(parentDirectory).href, {
       type: "readOnly",
     }),
   ),

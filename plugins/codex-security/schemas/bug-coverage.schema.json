@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "functional-bug://schemas/coverage.schema.json",
+  "title": "Functional bug scan coverage",
+  "type": "object",
+  "required": ["documentType", "schemaVersion", "scanId", "mode", "completeness", "includePaths", "excludePaths", "inventoryStrategy", "reviewedAreas", "explicitExclusions", "deferred"],
+  "properties": {
+    "documentType": {"const": "functional-bug-scan.coverage"},
+    "schemaVersion": {"const": "1.0"},
+    "scanId": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["repository", "scoped_path", "deep_repository"]},
+    "completeness": {"enum": ["complete", "partial", "unknown"]},
+    "includePaths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "excludePaths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "inventoryStrategy": {"type": "string", "minLength": 1},
+    "reviewedAreas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "disposition"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1},
+          "disposition": {"enum": ["reviewed", "follow_up", "excluded"]},
+          "paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "sourceWorkerIds": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "notes": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "surfaces": false,
+    "receiptRefs": false,
+    "explicitExclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "reason"],
+        "properties": {
+          "pattern": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "deferred": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "openQuestions": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {"type": "string", "minLength": 1},
+          {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+              "question": {"type": "string", "minLength": 1},
+              "followUpPrompt": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": false
+}

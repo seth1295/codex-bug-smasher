@@ -115,6 +115,7 @@ export type DeepScanStore = Omit<
 export interface CodexWorkerArtifactContext {
   root: string;
   layout: "worker" | "reducer";
+  mode?: string;
   deepReducer?: DeepReducerContext;
 }
 

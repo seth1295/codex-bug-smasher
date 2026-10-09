@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile as nodeExecFile } from "node:child_process";
 import { mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { importSource } from "./import-module.ts";
 
@@ -10,7 +11,7 @@ const execFile = promisify(nodeExecFile);
 const temporaryDirectories = createTemporaryDirectories(true);
 
 const inventory = await importSource(
-  new URL("../src/artifact-inventory.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-inventory.ts", import.meta.url)),
 );
 
 try {

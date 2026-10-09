@@ -5,18 +5,6 @@ const MAX_PERSISTED_ERROR_LENGTH = 2_400;
 const STALE_COORDINATOR_GENERATION_MESSAGE =
   "Deep Scan coordinator lease belongs to a newer generation.";
 
-// The SDK currently exposes only the message for turn errors. Match known
-// refusal messages exactly so repository output embedded in another error
-// cannot be mistaken for a refusal.
-const CYBERSECURITY_POLICY_REFUSAL_MESSAGES = new Set([
-  "Request blocked by cyberPolicy.",
-  "Request blocked by a safety policy violation.",
-  "This content was flagged for possible cybersecurity risk.",
-  "This content was flagged for potentially high-risk cyber activity.",
-  "This request has been flagged for possible cybersecurity risk.",
-  "This request has been flagged for potentially high-risk cyber activity.",
-]);
-
 /** Explicitly opt a confirmed scan-wide prerequisite failure out of retries. */
 export class DeepScanNonRetryableError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -58,7 +46,7 @@ export function boundedDeepScanErrorPair(
 function deepScanErrorMessage(error: unknown): string {
   return (
     (error instanceof Error ? error.message : String(error)).trim() ||
-    "Codex Security Deep Scan failed."
+    "Deep Bug Scan failed."
   );
 }
 
@@ -78,16 +66,10 @@ export function isStaleCoordinatorGenerationError(error: unknown): boolean {
   return false;
 }
 
-/** A safety refusal retires the refused thread; it is not a broken scan. */
-export function isCodexCybersecurityPolicyRefusal(error: unknown): boolean {
-  return CYBERSECURITY_POLICY_REFUSAL_MESSAGES.has(errorMessage(error));
-}
-
 export function classifyCodexWorkerError(error: unknown): Error {
   // OS error codes alone do not establish a permanent failure, and SDK errors
   // can contain arbitrary command output. Leave both on the normal retry path
-  // unless a producer explicitly identifies the failure as nonretryable. The
-  // worker runner handles exact policy refusals without failing the scan.
+  // unless a producer explicitly identifies the failure as nonretryable.
   return error instanceof Error ? error : new Error(String(error));
 }
 

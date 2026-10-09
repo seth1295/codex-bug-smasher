@@ -69,6 +69,10 @@ reason = "A six-thread cap provides room for an independent baseline and paralle
 description = "Capabilities for deep repository-wide Codex Security scans."
 requirements = []
 
+[profiles.functional_bug_scan]
+description = "Capabilities for resumable functional bug scans."
+requirements = []
+
 [profiles.security_diff_scan.remediation]
 summary = "Recommended Codex config for longer diff scans."
 
@@ -87,3 +91,7 @@ profile = "security_scan"
 [[routes]]
 skill = "deep-security-scan"
 profile = "deep_security_scan"
+
+[[routes]]
+skill = "deep-bug-scan"
+profile = "functional_bug_scan"

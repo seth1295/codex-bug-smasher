@@ -37,7 +37,6 @@ const {
   appendSafeItemDiagnostic,
   classifyCodexWorkerError,
   DeepScanNonRetryableError,
-  isCodexCybersecurityPolicyRefusal,
 } = await importModule({
   define: {
     "import.meta.url": JSON.stringify(executorSource.href),
@@ -111,9 +110,7 @@ try {
     await testAbortPropagation();
     await testUnstructuredConfigurationFailureRemainsRetryable();
     await testUnstructuredThreadStartFailureRemainsRetryable();
-    await testPolicyFailuresRemainWorkerErrors();
     await testMalformedCommandEventsRemainRetryable();
-    await testRateLimitPolicyFailureRemainsRetryable();
     await testArtifactStartupTimeoutClassification();
   }
   assert.equal(
@@ -219,40 +216,6 @@ function testWorkerErrorClassificationPreservesExplicitFailures() {
   );
   assert.equal(classifyCodexWorkerError(explicit), explicit);
 
-  const refusalMessages = [
-    "Request blocked by cyberPolicy.",
-    "Request blocked by a safety policy violation.",
-    "This content was flagged for possible cybersecurity risk.",
-    "This content was flagged for potentially high-risk cyber activity.",
-    "This request has been flagged for possible cybersecurity risk.",
-    "This request has been flagged for potentially high-risk cyber activity.",
-  ];
-  for (const message of refusalMessages) {
-    const original = new Error(message);
-    const classified = classifyCodexWorkerError(original);
-    assert.equal(classified, original);
-    assert.equal(classified.name, "Error");
-    assert.equal(isCodexCybersecurityPolicyRefusal(classified), true);
-
-    const explicitRefusal = new DeepScanNonRetryableError(message);
-    assert.equal(classifyCodexWorkerError(explicitRefusal), explicitRefusal);
-
-    for (const unrecognized of [
-      `Source fixture: ${message}`,
-      `${message} Source fixture.`,
-      JSON.stringify({ message }),
-      `Codex Exec exited with code 1: ${message}`,
-      `429 Too Many Requests: ${message}`,
-      ` ${message}`,
-      `${message}\n`,
-      message.toLowerCase(),
-    ]) {
-      const unrelated = new Error(unrecognized);
-      assert.equal(classifyCodexWorkerError(unrelated), unrelated);
-      assert.equal(isCodexCybersecurityPolicyRefusal(unrelated), false);
-    }
-  }
-
   for (const message of [
     "config parser handles unknown keys",
     "failed to load configuration: invalid value",
@@ -267,7 +230,7 @@ function testWorkerErrorClassificationPreservesExplicitFailures() {
     const original = new Error(message);
     assert.equal(classifyCodexWorkerError(original), original);
   }
-  for (const code of ["ECONNRESET", "EPIPE", "ETIMEDOUT", "cyber_policy"]) {
+  for (const code of ["ECONNRESET", "EPIPE", "ETIMEDOUT", "provider_error"]) {
     const original = Object.assign(new Error("Unrecognized worker failure"), {
       code,
     });
@@ -904,7 +867,7 @@ async function testSdkInvocationAndThreadCapture() {
       kind: "discovery",
       promptPath,
       workingDirectory,
-      subagents: 3,
+      subagents: 1,
       signal: new AbortController().signal,
       onThreadStarted: onThreadId,
     });
@@ -932,7 +895,7 @@ async function testSdkInvocationAndThreadCapture() {
       workerPermissionProfileOverride(invocation.argv),
       'permissions.codex_security_deep_scan_worker={extends=":read-only",filesystem={":root"="read","/repo/.env"="deny","/repo/**/.secret"="deny","/repo/**/*.pem"="deny",glob_scan_max_depth=3},network={enabled=false}}',
     );
-    assertWorkerSubagentPolicy(invocation.argv, 3);
+    assertWorkerSubagentPolicy(invocation.argv, 1);
     assertFlagPair(invocation.argv, "--cd", workingDirectory);
     assert.equal(invocation.argv.includes("--skip-git-repo-check"), true);
   }, deniedWorkerPermissionProfile);
@@ -1685,7 +1648,7 @@ async function testSdkResumesExistingThread() {
       kind: "discovery",
       promptPath,
       workingDirectory,
-      subagents: 3,
+      subagents: 1,
       signal: new AbortController().signal,
       resumeThreadId: "fixture-existing-thread",
       continuationPrompt: "continue the existing worker\n",
@@ -1698,7 +1661,7 @@ async function testSdkResumesExistingThread() {
     assertFlagPair(invocation.argv, "--model", "gpt-5.6-sol");
     assertConfigOverrides(invocation.argv, { model_reasoning_effort: "ultra" });
     assertReadOnlyWorkerPolicy(invocation.argv);
-    assertWorkerSubagentPolicy(invocation.argv, 3);
+    assertWorkerSubagentPolicy(invocation.argv, 1);
     assert.equal(invocation.stdin, "continue the existing worker\n");
   });
 }
@@ -1718,6 +1681,7 @@ async function testRetryNotificationDoesNotInterruptTurn() {
     assert.equal(result.threadId, "fixture-thread-id");
     const invocation = await readJson(fixture.markerPath);
     assert.equal(invocation.argv.includes("--model"), false);
+    assertWorkerSubagentPolicy(invocation.argv, 3);
     assertConfigOverrides(invocation.argv, {
       model_reasoning_effort: undefined,
     });
@@ -1997,39 +1961,11 @@ async function testUnstructuredThreadStartFailureRemainsRetryable() {
   );
 }
 
-async function testPolicyFailuresRemainWorkerErrors() {
-  for (const prompt of [
-    "CYBER_POLICY_ERROR",
-    "SAFETY_POLICY_ERROR",
-    "CYBERSECURITY_RISK_ERROR",
-    "HIGH_RISK_CYBER_ACTIVITY_ERROR",
-    "UPSTREAM_CYBERSECURITY_RISK_ERROR",
-    "UPSTREAM_HIGH_RISK_CYBER_ACTIVITY_ERROR",
-  ]) {
-    await assert.rejects(
-      runFixtureWorker(prompt),
-      (error: NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }) =>
-        error?.name === "Error" && isCodexCybersecurityPolicyRefusal(error),
-    );
-  }
-}
-
-async function testRateLimitPolicyFailureRemainsRetryable() {
-  await assert.rejects(
-    runFixtureWorker("RATE_LIMIT_CYBER_POLICY_ERROR"),
-    (error: NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }) =>
-      error?.name === "Error" &&
-      /429 Too Many Requests/.test(error?.message ?? ""),
-  );
-}
-
 async function testMalformedCommandEventsRemainRetryable() {
   for (const output of [
     "ordinary source text",
     "config parser handles unknown keys",
     "authentication required",
-    "Request blocked by cyberPolicy.",
-    "This request has been flagged for possible cybersecurity risk.",
   ]) {
     await withWorkerFixture(async (fixture, promptPath, workingDirectory) => {
       await writeFile(
@@ -2284,7 +2220,6 @@ if (stdin.includes('MCP_STARTUP_TIMEOUT') || stdin.includes('CATALOG_AUTH_ONLY')
     console.error('required MCP servers failed to initialize: ' + serverName + ': ' + timeout);
   }
   if (stdin.includes('WITH_MISSING_API_KEY')) console.error('missing API key');
-  if (stdin.includes('WITH_POLICY_REFUSAL')) console.error('Request blocked by cyberPolicy.');
   process.exit(1);
 }
 const resumeIndex = process.argv.indexOf('resume');
@@ -2301,13 +2236,6 @@ const permissionProfileFallbackWarning = 'Configured value for \`permission_prof
 if (stdin.includes('PERMISSION_PROFILE_FALLBACK_ITEM')) console.log(JSON.stringify({ type: 'item.completed', item: { id: 'warning-1', type: 'error', message: permissionProfileFallbackWarning } }));
 if (stdin.includes('PERMISSION_PROFILE_FALLBACK_EVENT')) console.log(JSON.stringify({ type: 'error', message: permissionProfileFallbackWarning }));
 if (stdin.includes('BLOCK_AFTER_START')) await new Promise(() => {});
-if (stdin.includes('RATE_LIMIT_CYBER_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: '429 Too Many Requests: Request blocked by cyberPolicy.' } })); process.exit(0); }
-if (stdin.includes('CYBER_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'Request blocked by cyberPolicy.' } })); process.exit(0); }
-if (stdin.includes('SAFETY_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'Request blocked by a safety policy violation.' } })); process.exit(0); }
-if (stdin.includes('UPSTREAM_CYBERSECURITY_RISK_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This request has been flagged for possible cybersecurity risk.' } })); process.exit(0); }
-if (stdin.includes('UPSTREAM_HIGH_RISK_CYBER_ACTIVITY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This request has been flagged for potentially high-risk cyber activity.' } })); process.exit(0); }
-if (stdin.includes('CYBERSECURITY_RISK_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This content was flagged for possible cybersecurity risk.' } })); process.exit(0); }
-if (stdin.includes('HIGH_RISK_CYBER_ACTIVITY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This content was flagged for potentially high-risk cyber activity.' } })); process.exit(0); }
 if (stdin.includes('RETRYABLE_STREAM_ERROR')) console.log(JSON.stringify({ type: 'error', message: 'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)' }));
 if (stdin.includes('INCOMPLETE_STREAM')) { console.log(JSON.stringify({ type: 'error', message: 'fixture stream interrupted' })); process.exit(0); }
 if (stdin.includes('BWRAP_NAMESPACE_FAILURE')) console.log(JSON.stringify({ type: 'item.completed', item: { id: 'command-1', type: 'command_execution', command: 'super-secret-command', aggregated_output: 'private source text\\nbwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_user_namespaces exceeded (ENOSPC)', exit_code: 1, status: 'failed' } }));

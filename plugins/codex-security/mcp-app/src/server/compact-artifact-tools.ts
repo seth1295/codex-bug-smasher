@@ -88,7 +88,7 @@ export function registerReviewItemTools(
   registerCompactTool(server, {
     name: "list_codex_security_review_items",
     title: "List Codex Security Review Items",
-    description: "Read one page of the diff or Deep scan discovery inventory.",
+    description: "Read one page of the diff scan discovery inventory.",
     inputSchema: reviewItemsReaderInputSchema,
     readOnly: true,
     handler: async (input, requestContext) => {
@@ -100,7 +100,7 @@ export function registerReviewItemTools(
   });
 }
 
-/** Record diff candidates and read existing diff or Deep candidates. */
+/** Record diff candidates and read existing diff candidates. */
 export function registerDiscoveryCandidateTools(
   server: McpServer,
   options: CompactArtifactToolOptions,
@@ -125,7 +125,7 @@ export function registerDiscoveryCandidateTools(
   registerCompactTool(server, {
     name: "list_codex_security_candidates",
     title: "List Codex Security Candidates",
-    description: "Read one page of diff or Deep scan discovery candidates.",
+    description: "Read one page of diff scan discovery candidates.",
     inputSchema: readerSchema,
     readOnly: true,
     handler: async (input, requestContext) => {
@@ -140,7 +140,7 @@ export function registerDiscoveryCandidateTools(
   });
 }
 
-/** Record centralized validation results for a diff or Deep scan. */
+/** Record centralized validation results for a diff scan. */
 export function registerCandidateValidationTools(
   server: McpServer,
   options: CompactArtifactToolOptions,
@@ -148,7 +148,7 @@ export function registerCandidateValidationTools(
   registerCompactTool(server, {
     name: "record_codex_security_candidate_validations",
     title: "Record Codex Security Candidate Validations",
-    description: "Record the diff or Deep scan candidate validation results.",
+    description: "Record the diff scan candidate validation results.",
     inputSchema: candidateValidationsInputSchema,
     readOnly: false,
     handler: async (input, requestContext) => {
@@ -160,7 +160,7 @@ export function registerCandidateValidationTools(
   });
 }
 
-/** Record centralized attack-path results for a diff or Deep scan. */
+/** Record centralized attack-path results for a diff scan. */
 export function registerCandidateAttackPathTools(
   server: McpServer,
   options: CompactArtifactToolOptions,
@@ -168,7 +168,7 @@ export function registerCandidateAttackPathTools(
   registerCompactTool(server, {
     name: "record_candidate_attack_paths",
     title: "Record Codex Security Candidate Attack Paths",
-    description: "Record the diff or Deep scan candidate attack-path results.",
+    description: "Record the diff scan candidate attack-path results.",
     inputSchema: candidateAttackPathsInputSchema,
     readOnly: false,
     handler: async (input, requestContext) => {

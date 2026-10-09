@@ -1244,10 +1244,10 @@ def test_reducer_claim_updates_review_pass_once_and_projects_consolidation(
 @pytest.mark.parametrize(
     ("workers_configuration", "available_parallelism", "expected_workers"),
     [
-        (None, 1, 4),
-        (None, 16, 4),
-        ('workers = "auto"\n', 1, 4),
-        ('workers = "auto"\n', 16, 4),
+        (None, 1, 2),
+        (None, 16, 2),
+        ('workers = "auto"\n', 1, 2),
+        ('workers = "auto"\n', 16, 2),
         ("workers = 1\n", 16, 1),
         ("workers = 6\n", 1, 6),
     ],
@@ -1283,7 +1283,7 @@ def test_deep_scan_worker_defaults_do_not_depend_on_available_parallelism(
 
     assert deep_scan["config"] == {
         "workers": expected_workers,
-        "subagents": 3,
+        "subagents": 1,
         "stopAfterNoNew": 4,
         "stopAfterConsecutiveErrors": 3,
         "maxDiscoveryRuns": 40,
@@ -1345,7 +1345,7 @@ def test_target_begin_is_atomic_idempotent_and_snapshots_config(tmp_path: Path) 
     assert deep_scan["status"] == "running"
     assert deep_scan["phase"] == "setup"
     assert deep_scan["config"] == {
-        "workers": 4,
+        "workers": 2,
         "subagents": 2,
         "stopAfterNoNew": 4,
         "stopAfterConsecutiveErrors": 3,
@@ -2401,7 +2401,7 @@ def test_app_scan_begin_validates_mode_and_owner(tmp_path: Path) -> None:
         environment=deep_environment(codex_home),
     )
     assert begun["startDisposition"] == "created"
-    assert begun["deepScan"]["config"]["workers"] == 4
+    assert begun["deepScan"]["config"]["workers"] == 2
     scan_dir = Path(str(begun["deepScan"]["scanDir"]))
     prompt, artifact_dir, _ = worker_paths(scan_dir, "setup-worker")
     worker_id = str(uuid.uuid4())

@@ -23,34 +23,39 @@ export async function createReducerPagingFixture(root: string) {
     ),
   );
 
-  const freshHtml = finding("reflected-html", {
-    title: "Request text reaches an HTML response without encoding",
+  const freshProration = finding("fractional-proration", {
+    title: "Proration truncates the ratio before multiplying the amount",
     summary: paddedSummary(IPC_FRAME_LIMIT_BYTES / 2),
-    remediation: "HTML-encode request text at the response rendering boundary.",
+    expected: "Prorating 500 cents at two fifths returns 200 cents.",
+    actual: "Integer division returns 0 cents before the amount is applied.",
+    impact: "Invoice adjustments can undercharge a customer.",
   });
-  const freshArchive = finding("archive-path", {
-    title: "Archive entry paths escape the extraction directory",
+  const freshSorting = finding("batch-sort-order", {
+    title: "The import comparator reorders equal-value rows inconsistently",
     summary:
-      "An independently reachable archive importer joins an untrusted entry path to the extraction directory without checking containment. This is unrelated to HTML rendering or database queries.",
-    remediation:
-      "Resolve each archive entry against the extraction directory and enforce containment before writing it.",
+      "An independently reachable batch import treats equal-value rows as unequal because the comparator ignores the stable secondary key.",
+    expected: "Rows with equal values retain their input order.",
+    actual: "Equal-value rows can swap order between runs.",
+    impact: "Imported records can be associated with the wrong adjacent item.",
   });
-  const previousOriginal = finding("query-injection", {
-    title: "Account lookup interpolates request text into a database query",
+  const previousOriginal = finding("pagination-total", {
+    title: "Pagination reports the page size instead of the total result count",
     summary:
-      "The account lookup builds a query by concatenating request-controlled text. Parameter binding is absent on this path.",
-    remediation: "Use parameter binding for account lookup query values.",
+      "The count field is calculated from the current page after slicing rather than from the full filtered result set.",
+    expected: "The response count matches the full filtered result set.",
+    actual: "The response count is limited to the current page.",
+    impact: "Callers stop pagination before they receive all matching records.",
   });
   const synthesizedHistory = {
     ...previousOriginal,
     summary:
-      "Earlier synthesis also established that the transactional account lookup calls the same unsafe query builder. Both paths need the shared parameter-binding fix.",
+      "Earlier synthesis also established that the export endpoint reuses the same count helper. One correction fixes both response paths.",
   };
   const previousSourceId = "previous-worker:0";
   const previousCanonical = {
     ...previousOriginal,
     summary:
-      "Account lookup and transactional lookup share a query builder that interpolates request text. A shared parameter-binding fix covers both reachable paths.",
+      "The page response and export response share a count helper that uses the sliced result. One correction fixes both paths.",
     provenance: {
       ...previousOriginal.provenance,
       sourceFindingIds: [previousSourceId],
@@ -59,7 +64,7 @@ export async function createReducerPagingFixture(root: string) {
     },
   };
   const workerId = "current-worker";
-  const currentFindings = [freshHtml, freshArchive];
+  const currentFindings = [freshProration, freshSorting];
   const expectedSources = new Map<string, ReturnType<typeof finding>>([
     ...currentFindings.map(
       (value, index) => [`${workerId}:${index}`, value] as const,
@@ -73,21 +78,19 @@ export async function createReducerPagingFixture(root: string) {
     scanId: SCAN_ID,
     findings: currentFindings,
     scope: {
-      summary: "Three independent synthetic request-processing issues.",
+      summary: "Three independent synthetic functional behavior issues.",
     },
   };
   const previous = {
     scanId: SCAN_ID,
+    reviewType: "functional_bug",
     findings: [previousCanonical],
-    threatModel: {
-      summary:
-        "Untrusted request inputs cross distinct output, filesystem, and query boundaries.",
-    },
   };
   const workerPath = path.join(workerRoot, "result.json");
   const previousPath = path.join(previousRoot, "result.json");
   await writeJson(workerPath, {
     ...result,
+    reviewType: "functional_bug",
     coverage: {
       completeness: "complete",
       surfaces: [],
@@ -144,7 +147,7 @@ export async function createReducerPagingFixture(root: string) {
     },
     measurements: {
       ipcFrameLimitBytes: IPC_FRAME_LIMIT_BYTES,
-      largeSemanticFieldBytes: Buffer.byteLength(freshHtml.summary),
+      largeSemanticFieldBytes: Buffer.byteLength(freshProration.summary),
       logicalInputBytes: bytes,
       legacyResponseBytes,
     },
@@ -224,37 +227,38 @@ export async function gradeReducerPagingResult(
 }
 
 function finding(
-  id: "reflected-html" | "archive-path" | "query-injection",
-  extra: Record<"title" | "summary" | "remediation", string>,
+  id: "fractional-proration" | "batch-sort-order" | "pagination-total",
+  extra: Record<"title" | "summary" | "expected" | "actual" | "impact", string>,
 ) {
   return {
     ruleId: "synthetic." + id,
     identity: { anchor: id },
     title: extra.title,
     summary: extra.summary,
-    severity: { level: "high" },
+    priority: "P2",
+    category: "algorithm",
     confidence: { level: "high", rationale: "Synthetic validated fixture." },
-    taxonomy: {
-      category: id,
-      cwe: [
-        {
-          "reflected-html": "CWE-79",
-          "archive-path": "CWE-22",
-          "query-injection": "CWE-89",
-        }[id],
-      ],
+    locations: [{ path: `src/${id}.mjs`, startLine: 1, endLine: 2 }],
+    expected: extra.expected,
+    actual: extra.actual,
+    impact: extra.impact,
+    validation: {
+      status: "validated",
+      method: "Focused deterministic fixture reproduction.",
+      evidence: ["The synthetic input produced the incorrect result."],
+      counterEvidence: ["A corrected sibling implementation returns the contract value."],
     },
-    locations: [{ path: `src/${id}.ts`, startLine: 1, endLine: 2 }],
-    remediation: extra.remediation,
+    suggestedCorrection: "Correct the calculation while preserving the documented contract.",
+    tests: ["Add a regression test for the reproduced input."],
     provenance: { source: "local_plugin" },
   };
 }
 
 function paddedSummary(bytes: number) {
   const beginning =
-    "BEGIN ISSUE: Request text reaches an HTML response without encoding. The following repeated text is synthetic padding to exercise byte-aware paging, not additional evidence.\n";
+    "BEGIN BUG: Integer division truncates a fractional ratio before applying it to the amount. The following repeated text is synthetic padding to exercise byte-aware paging, not additional evidence.\n";
   const ending =
-    "\nEND ISSUE: The remedy is HTML encoding at the response boundary. Archive extraction and query interpolation are distinct issues requiring independent fixes.";
+    "\nEND BUG: Multiply before dividing and define the rounding rule. Sorting stability and pagination totals are distinct issues requiring independent corrections.";
   const available =
     bytes - Buffer.byteLength(beginning) - Buffer.byteLength(ending);
   const unit = '"\\\n😀';

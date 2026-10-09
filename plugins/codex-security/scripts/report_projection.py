@@ -755,6 +755,8 @@ def build_report_markdown(
     manifest: dict[str, Any], findings_document: dict[str, Any], coverage: dict[str, Any]
 ) -> str:
     scan = manifest["scan"]
+    if scan.get("reviewType") == "functional_bug":
+        return _build_functional_bug_report(manifest, findings_document, coverage)
     target = scan["target"]
     scope = scan["scope"]
     threat_model = scan.get("threatModel") if isinstance(scan.get("threatModel"), dict) else {}
@@ -1050,6 +1052,260 @@ def build_report_markdown(
             prompt = _text(question.get("followUpPrompt"), "")
             if prompt:
                 lines.append(f"  - Follow-up prompt: {prompt}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _bug_priority_order(priority: str) -> int:
+    return {"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(priority, 4)
+
+
+def _bug_location_text(finding: dict[str, Any]) -> str:
+    locations = []
+    for location in finding.get("locations", []):
+        if not isinstance(location, dict):
+            continue
+        path = _text(location.get("path"), "unknown path")
+        start = location.get("startLine", 1)
+        end = location.get("endLine", start)
+        location_text = f"{path}:{start}" if end == start else f"{path}:{start}-{end}"
+        locations.append(location_text)
+    return ", ".join(locations) or "not recorded"
+
+
+def _build_functional_bug_report(
+    manifest: dict[str, Any], findings_document: dict[str, Any], coverage: dict[str, Any]
+) -> str:
+    scan = manifest["scan"]
+    target = scan["target"]
+    scope = scan["scope"]
+    findings = sorted(
+        findings_document.get("findings", []),
+        key=lambda finding: (
+            _bug_priority_order(finding.get("priority", "P3")),
+            finding.get("occurrenceId", ""),
+        ),
+    )
+    deferred = coverage.get("deferred", [])
+    hypotheses = findings_document.get("hypotheses", [])
+    priority_counts = Counter(finding.get("priority", "unknown") for finding in findings)
+    confidence_counts = Counter(
+        finding.get("confidence", {}).get("level", "unknown") for finding in findings
+    )
+    include_paths = _strings(coverage.get("includePaths"))
+    exclude_paths = _strings(coverage.get("excludePaths"))
+    lines = [
+        f"# Functional Bug Report: {_text(target.get('displayName'), 'Unknown target')}",
+        "",
+        "## Scan scope",
+        "",
+        _text(scope.get("summary"), "The scan reviewed the configured paths below."),
+        "",
+        f"- Scan mode: {_text(coverage.get('mode'), 'not recorded')}",
+        f"- Included paths: {', '.join(include_paths) or 'none'}",
+        f"- Excluded paths: {', '.join(exclude_paths) or 'none'}",
+        f"- Coverage: {_text(coverage.get('completeness'), 'unknown')}",
+        "",
+        "## Summary",
+        "",
+        f"- Confirmed bugs: {len(findings)}",
+        "- Priority: "
+        + (
+            ", ".join(
+                f"{level}: {priority_counts[level]}"
+                for level in ("P0", "P1", "P2", "P3")
+                if priority_counts[level]
+            )
+            or "none"
+        ),
+        "- Confidence: "
+        + (
+            ", ".join(
+                f"{level}: {confidence_counts[level]}"
+                for level in ("high", "medium", "low")
+                if confidence_counts[level]
+            )
+            or "none"
+        ),
+        f"- Unvalidated hypotheses: {len(hypotheses) if isinstance(hypotheses, list) else 0}",
+        "",
+    ]
+    if findings:
+        lines.extend(
+            [
+                "## Confirmed bugs",
+                "",
+                "| Bug | Priority | Confidence | Location |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for index, finding in enumerate(findings, 1):
+            title = _cell(finding.get("title", "Untitled bug"))
+            lines.append(
+                f"| [{title}](#bug-{index}) | {_cell(finding.get('priority', 'not recorded'))} "
+                f"| {_cell(finding.get('confidence', {}).get('level', 'not recorded'))} "
+                f"| {_cell(_bug_location_text(finding))} |"
+            )
+        for index, finding in enumerate(findings, 1):
+            validation = finding.get("validation", {})
+            if not isinstance(validation, dict):
+                validation = {}
+            lines.extend(
+                [
+                    "",
+                    f'<a id="bug-{index}"></a>',
+                    "",
+                    f"### {index}. {_text(finding.get('title'), 'Untitled bug')}",
+                    "",
+                    f"**Priority:** {_text(finding.get('priority'), 'not recorded')}  ",
+                    f"**Confidence:** {_text(finding.get('confidence', {}).get('level'), 'not recorded')}  ",
+                    f"**Confidence rationale:** {_text(finding.get('confidence', {}).get('rationale'), 'not recorded')}  ",
+                    f"**Category:** {_text(finding.get('category'), 'not recorded')}  ",
+                    f"**Location:** {_text(_bug_location_text(finding), 'not recorded')}",
+                    "",
+                    "#### What happens",
+                    "",
+                    _text(finding.get("summary"), "No summary recorded."),
+                    "",
+                    "#### Expected behavior",
+                    "",
+                    _text(finding.get("expected"), "Not recorded."),
+                    "",
+                    "#### Actual behavior",
+                    "",
+                    _text(finding.get("actual"), "Not recorded."),
+                    "",
+                    "#### Impact and reachability",
+                    "",
+                    _text(finding.get("impact"), "Not recorded."),
+                ]
+            )
+            reachability = finding.get("reachability")
+            if isinstance(reachability, str):
+                lines.extend(["", _text(reachability, "")])
+            elif isinstance(reachability, dict):
+                if reachability.get("entrypoint"):
+                    lines.extend(["", f"Entry point: {_text(reachability['entrypoint'], '')}"])
+                steps = _strings(reachability.get("steps"))
+                if steps:
+                    lines.extend(["", "Steps:", *_bullets(steps, "Not recorded.")])
+                preconditions = _strings(reachability.get("preconditions"))
+                if preconditions:
+                    lines.extend(["", "Preconditions:", *_bullets(preconditions, "Not recorded.")])
+            lines.extend(
+                [
+                    "",
+                    "#### Validation",
+                    "",
+                    f"Method: {_text(validation.get('method'), 'not recorded')}",
+                ]
+            )
+            for heading, field in (
+                ("Evidence", "evidence"),
+                ("Reproduction", "reproduction"),
+                ("Counterevidence", "counterEvidence"),
+                ("Remaining limitations", "limitations"),
+            ):
+                values = _strings(validation.get(field))
+                if values:
+                    lines.extend(["", f"{heading}:", *_bullets(values, "None recorded.")])
+            if finding.get("rootCause"):
+                lines.extend(["", "#### Root cause", "", _text(finding["rootCause"], "")])
+            if finding.get("suggestedCorrection"):
+                lines.extend(
+                    ["", "#### Suggested correction", "", _text(finding["suggestedCorrection"], "")]
+                )
+            tests = _strings(finding.get("tests"))
+            if tests:
+                lines.extend(["", "#### Regression tests", "", *_bullets(tests, "None recorded.")])
+    else:
+        lines.extend(["## Confirmed bugs", "", "No validated correctness bugs were retained."])
+
+    reviewed = coverage.get("reviewedAreas", [])
+    if reviewed:
+        lines.extend(
+            ["", "## Reviewed areas", "", "| Area | Status | Notes |", "| --- | --- | --- |"]
+        )
+        for area in reviewed:
+            if not isinstance(area, dict):
+                continue
+            lines.append(
+                f"| {_cell(area.get('label'))} | {_cell(area.get('disposition'))} "
+                f"| {_cell(area.get('notes', ''))} |"
+            )
+
+    exclusions = coverage.get("explicitExclusions", [])
+    if exclusions:
+        lines.extend(["", "## Exclusions", ""])
+        for exclusion in exclusions:
+            if isinstance(exclusion, dict):
+                lines.append(
+                    f"- {_cell(exclusion.get('pattern'))}: {_cell(exclusion.get('reason'))}"
+                )
+
+    if isinstance(hypotheses, list) and hypotheses:
+        lines.extend(
+            [
+                "",
+                "## Unvalidated hypotheses",
+                "",
+                "These candidates did not meet the confirmation standard and are not counted as bugs.",
+            ]
+        )
+        for index, hypothesis in enumerate(hypotheses, 1):
+            if not isinstance(hypothesis, dict):
+                continue
+            detail = hypothesis.get("candidate", hypothesis.get("finding", {}))
+            detail = detail if isinstance(detail, dict) else {}
+            title = detail.get("title", hypothesis.get("title", f"Hypothesis {index}"))
+            summary = detail.get("summary", hypothesis.get("reason", "Proof is incomplete."))
+            evidence = _strings(
+                detail.get(
+                    "evidence",
+                    detail.get("validation", {}).get("evidence")
+                    if isinstance(detail.get("validation"), dict)
+                    else [],
+                )
+            )
+            lines.extend(
+                [
+                    "",
+                    f"### {index}. {_text(title, f'Hypothesis {index}')}",
+                    "",
+                    _text(summary, "No summary recorded."),
+                ]
+            )
+            if evidence:
+                lines.extend(["", "Available evidence:", *_bullets(evidence, "None recorded.")])
+            if hypothesis.get("reason"):
+                lines.extend(["", f"Proof gap: {_text(hypothesis['reason'], 'not recorded')}"])
+
+    other_deferred = (
+        [
+            item
+            for item in deferred
+            if isinstance(item, dict)
+            and not (
+                "candidate" in item or "finding" in item or isinstance(item.get("hypothesis"), str)
+            )
+        ]
+        if isinstance(deferred, list)
+        else []
+    )
+    if other_deferred:
+        lines.extend(["", "## Deferred review work", ""])
+        for item in other_deferred:
+            lines.append(f"- {_text(item.get('reason'), 'Review remains incomplete.')}")
+
+    questions = coverage.get("openQuestions", [])
+    if isinstance(questions, list) and questions:
+        lines.extend(["", "## Open questions", ""])
+        for question in questions:
+            if isinstance(question, str):
+                lines.append(f"- {_text(question, 'Unspecified question.')}")
+            elif isinstance(question, dict):
+                lines.append(f"- {_text(question.get('question'), 'Unspecified question.')}")
+                if question.get("followUpPrompt"):
+                    lines.append(f"  - Follow-up: {_text(question['followUpPrompt'], '')}")
     return "\n".join(lines).rstrip() + "\n"
 
 

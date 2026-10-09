@@ -343,7 +343,7 @@ def _parent_scan_draft(
         "coverage": coverage,
         **{
             key: parent_scan[key]
-            for key in ("scope", "threatModel", "complete")
+            for key in ("scope", "threatModel", "complete", "reviewType")
             if key in parent_scan
         },
     }

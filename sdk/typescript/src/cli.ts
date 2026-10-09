@@ -3234,7 +3234,7 @@ export async function main(
     },
   });
   const cli = Cli.create("codex-security", {
-    description: "Find, review, and fix security issues in your code.",
+    description: "Deep-scan for functional bugs; Standard mode reviews security issues.",
     version: VERSION,
     mcp: {
       command: "npx --yes @openai/codex-security --mcp",
@@ -3449,7 +3449,9 @@ export async function main(
             .describe(
               "Reuse completed work in the named local findings workflow.",
             ),
-          cyberAccessProgram: ScanSettingsSchema.shape.cyberAccessProgram,
+          cyberAccessProgram: ScanSettingsSchema.shape.cyberAccessProgram.describe(
+            "Security-only access program for Standard scans; not supported for deep functional bug scans.",
+          ),
           auth: ScanSettingsSchema.shape.auth.describe(
             "Select ChatGPT, OPENAI_API_KEY/CODEX_API_KEY, or automatic authentication (default: auto).",
           ),
@@ -3502,7 +3504,7 @@ export async function main(
             .optional()
             .describe("Git base ref for --working-tree (default: HEAD)."),
           mode: ScanSettingsSchema.shape.mode.describe(
-            "Scan mode (default: standard); deep supports repository and path targets.",
+            "Scan mode (default: standard); deep runs a resumable functional bug scan on repository or path targets.",
           ),
           ...DEEP_SCAN_OPTION_SCHEMAS,
           ...modelOptions(
@@ -3566,6 +3568,24 @@ export async function main(
         .refine((options) => !options.patch || !options.dryRun, {
           message: "--patch cannot be combined with --dry-run.",
         })
+        .refine(
+          (options) =>
+            options.mode !== "deep" ||
+            (!options.patch &&
+              options.patchSeverity === undefined &&
+              !options.createPr),
+          {
+            message: "Patch options are not supported for functional bug scans.",
+          },
+        )
+        .refine(
+          (options) =>
+            options.mode !== "deep" || options.cyberAccessProgram === undefined,
+          {
+            message:
+              "--cyber-access-program is not supported for functional bug scans.",
+          },
+        )
         .refine(
           (options) => !options.mock || (!options.dryRun && !options.patch),
           {
@@ -8742,9 +8762,11 @@ async function executeScan(
     deepScanStop,
   );
   const completedScan = (exitCode: number): ScanOutcome => {
+    const findingCount =
+      result.bugFindings?.findings.length ?? findings.length;
     diagnostic("scan.completed", {
       coverage: result.coverage.completeness,
-      findings: findings.length,
+      findings: findingCount,
       scan_id: result.manifest.scan.id,
       estimated_usd: showCost ? result.cost?.estimatedUsd : undefined,
       cost_estimate:
@@ -9147,6 +9169,34 @@ function printScanSummary(
 ): void {
   const paint = (value: string, code: number | string): string =>
     color ? `\u001B[${code}m${value}\u001B[0m` : value;
+  if (result.bugFindings !== null) {
+    const counts = new Map<string, number>();
+    for (const finding of result.bugFindings.findings) {
+      counts.set(finding.priority, (counts.get(finding.priority) ?? 0) + 1);
+    }
+    const prioritySummary = (["P0", "P1", "P2", "P3"] as const)
+      .filter((priority) => counts.has(priority))
+      .map((priority) => `${counts.get(priority)} ${priority}`)
+      .join(", ");
+    errorOutput.write(
+      `${paint("Functional bug scan", "1;36")} · ${result.bugFindings.findings.length} confirmed bug${result.bugFindings.findings.length === 1 ? "" : "s"}${prioritySummary ? ` (${prioritySummary})` : ""}\n`,
+    );
+    errorOutput.write(
+      `Report: ${result.reportPath}\nCoverage: ${result.bugCoverage?.completeness ?? "unknown"}\n`,
+    );
+    if (result.bugCoverage?.deferred.length) {
+      errorOutput.write(
+        `${result.bugCoverage.deferred.length} items remain unvalidated or deferred; see the report.\n`,
+      );
+    }
+    if (showCost && result.cost) {
+      errorOutput.write(`Estimated cost: $${result.cost.estimatedUsd.toFixed(4)}\n`);
+    }
+    if (deepScanStop?.reason) {
+      errorOutput.write(`${deepScanStop.reason}\n`);
+    }
+    return;
+  }
   const repositoryFindings = result.repositoryFindings;
   const findings = repositoryFindings ?? result.findings.findings;
   const severities = new Map<SeverityLevel, number>();

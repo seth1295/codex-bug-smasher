@@ -5,18 +5,28 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importSource } from "./import-module.ts";
 
 const {
   candidateValidationsInputSchema,
   recordCodexSecurityCandidateValidations,
 } = await importSource(
-  new URL("../src/artifact-validation-phase.ts", import.meta.url).pathname,
+  fileURLToPath(
+    new URL("../src/artifact-validation-phase.ts", import.meta.url),
+  ),
 );
 
 const toolSchema = await readJson(
   import.meta.dirname,
   "../../schemas/tools/candidate-validations.schema.json",
+);
+await assert.rejects(
+  recordCodexSecurityCandidateValidations(
+    { root: "/scan", repoRoot: "/repo", layout: "scan", mode: "deep" },
+    { validations: [] },
+  ),
+  /Security candidate validation is unavailable during functional bug scans/,
 );
 assert.equal(
   toolSchema.$schema,

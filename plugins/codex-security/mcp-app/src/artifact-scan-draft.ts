@@ -24,6 +24,7 @@ import { saveThreatModelDocument } from "./threat-model-document.js";
 
 export interface ScanDraftInput {
   scanId: string;
+  reviewType?: "functional_bug";
   complete?: boolean;
   handoffClaimToken?: string;
   scope?: JsonObject;
@@ -78,6 +79,12 @@ export const scanDraftInputSchema = loadArtifactZodSchema(
   "scanDraftInput",
 ) as z.ZodType<ScanDraftInput>;
 
+const bugScanDraftInputSchema = loadArtifactZodSchema(
+  schemaDocuments,
+  scanDraftDocument.$id,
+  "bugScanDraftInput",
+) as z.ZodType<ScanDraftInput>;
+
 export const completedScanInputSchema = loadArtifactZodSchema(
   schemaDocuments,
   scanDraftDocument.$id,
@@ -91,7 +98,11 @@ export async function recordCodexSecurityScanDraft(
   publishDraft?: PublishScanDraft,
   signal?: AbortSignal,
 ): Promise<ScanDraftResult> {
-  const parsed = parseScanDraft(input);
+  const parsed = parseScanDraft(
+    context.mode === "deep"
+      ? { ...input, reviewType: "functional_bug" }
+      : input,
+  );
   requireBoundScan(context, parsed, true);
   const finalDeepDraft = context.mode === "deep" && parsed.complete !== false;
   if (finalDeepDraft && resolvedDeferred(parsed.coverage).length > 0) {
@@ -133,21 +144,47 @@ export async function recordCodexSecurityScanDraft(
       reconciled.coverage,
       scope,
       target,
+      reconciled.reviewType,
+      reconciled.scanId,
     );
-    const hardening = await readExistingHardeningPortfolio(context);
+    const hardening =
+      reconciled.reviewType === "functional_bug"
+        ? undefined
+        : await readExistingHardeningPortfolio(context);
     const manifestScan: JsonObject = {
       ...(reconciled.complete === false ? { complete: false } : {}),
+      ...(reconciled.reviewType === "functional_bug"
+        ? { reviewType: "functional_bug" }
+        : {}),
       target,
       scope,
-      ...(reconciled.threatModel === undefined
+      ...(reconciled.reviewType === "functional_bug" ||
+      reconciled.threatModel === undefined
         ? {}
         : { threatModel: reconciled.threatModel }),
       ...(hardening === undefined ? {} : { hardening }),
     };
+    const findingsDocument =
+      reconciled.reviewType === "functional_bug"
+        ? {
+            documentType: "functional-bug-scan.findings",
+            schemaVersion: "1.0",
+            scanId: reconciled.scanId,
+            findings,
+            hypotheses: structuredClone(
+              (reconciled.coverage.deferred as JsonObject[]).filter(
+                (item) =>
+                  "candidate" in item ||
+                  "finding" in item ||
+                  typeof item.hypothesis === "string",
+              ),
+            ),
+          }
+        : { findings };
 
     try {
       const draft = {
-        findings: { findings },
+        findings: findingsDocument,
         coverage,
         manifest: { scan: manifestScan },
       };
@@ -176,7 +213,7 @@ export async function recordCodexSecurityScanDraft(
             "scan draft manifest",
           ),
         ]);
-        await replaceArtifactJson(destinations[0], { findings });
+        await replaceArtifactJson(destinations[0], findingsDocument);
         await replaceArtifactJson(destinations[1], coverage);
         await replaceArtifactJson(destinations[2], { scan: manifestScan });
         const warning = await saveThreatModelDocument(
@@ -188,7 +225,10 @@ export async function recordCodexSecurityScanDraft(
       return {
         scanId: reconciled.scanId,
         findingCount: findings.length,
-        surfaceCount: (coverage.surfaces as unknown[]).length,
+        surfaceCount:
+          reconciled.reviewType === "functional_bug"
+            ? (coverage.reviewedAreas as unknown[]).length
+            : (coverage.surfaces as unknown[]).length,
         coverage,
         operation: "replace",
         status: "draft_written",
@@ -275,7 +315,11 @@ export async function recordCodexSecurityWorkerScanDraft(
   context: ArtifactContext,
   input: ScanDraftInput,
 ): Promise<ScanDraftResult> {
-  const parsed = parseScanDraft(input);
+  const parsed = parseScanDraft(
+    context.mode === "deep"
+      ? { ...input, reviewType: "functional_bug" }
+      : input,
+  );
   if (context.layout !== "worker") {
     throw new Error(
       "scan draft: this operation requires a bound worker context.",
@@ -1264,6 +1308,9 @@ async function readPreviousScanDraft(
         : Math.min(...saved.map((record) => record!.modifiedMs)),
     input: parsePersistedCheckpoint({
       scanId: context.scanId,
+      ...(scan.reviewType === "functional_bug"
+        ? { reviewType: "functional_bug" }
+        : {}),
       ...(scan.complete === false ? { complete: false } : {}),
       ...(isObject(scan.scope) ? { scope: scan.scope } : {}),
       ...(isObject(scan.threatModel) ? { threatModel: scan.threatModel } : {}),
@@ -1843,8 +1890,12 @@ export function parseScanDraft(input: ScanDraftInput): ScanDraftInput {
 }
 
 function parseScanDraftDocument(input: unknown): ScanDraftInput {
-  const parsed = scanDraftInputSchema.parse(input);
-  validateFindingSemantics(parsed.findings);
+  const isBugScan = isObject(input) && input.reviewType === "functional_bug";
+  const parsed = isBugScan
+    ? bugScanDraftInputSchema.parse(input)
+    : scanDraftInputSchema.parse(input);
+  if (isBugScan) validateBugFindingSemantics(parsed.findings);
+  else validateFindingSemantics(parsed.findings);
   validateCoverageSemantics(parsed.coverage);
   return parsed;
 }
@@ -1885,6 +1936,32 @@ function parsePersistedCheckpoint(
       "inventoryStrategy",
     ])
       delete compatible.coverage[field];
+    if (compatible.reviewType === "functional_bug") {
+      const reviewedAreas = compatible.coverage.reviewedAreas;
+      if (
+        !Array.isArray(compatible.coverage.surfaces) &&
+        Array.isArray(reviewedAreas)
+      ) {
+        compatible.coverage.surfaces = reviewedAreas.map((area) => {
+          if (!isObject(area)) return area;
+          const disposition = area.disposition;
+          return {
+            ...Object.fromEntries(
+              ["label", "paths", "sourceWorkerIds", "notes"].flatMap((key) =>
+                key in area ? [[key, area[key]]] : [],
+              ),
+            ),
+            disposition:
+              disposition === "follow_up"
+                ? "needs_follow_up"
+                : disposition === "excluded"
+                  ? "not_applicable"
+                  : "no_issue_found",
+          };
+        });
+      }
+      delete compatible.coverage.reviewedAreas;
+    }
   }
   if (Array.isArray(compatible.findings)) {
     for (const finding of compatible.findings) {
@@ -2344,9 +2421,51 @@ function buildCoverage(
   semanticCoverage: JsonObject,
   scope: JsonObject,
   target: JsonObject,
+  reviewType?: ScanDraftInput["reviewType"],
+  scanId?: string,
 ): JsonObject {
   const openQuestions = semanticCoverage.openQuestions as
     Array<string | JsonObject> | undefined;
+
+  if (reviewType === "functional_bug") {
+    return {
+      documentType: "functional-bug-scan.coverage",
+      schemaVersion: "1.0",
+      scanId,
+      mode: coverageMode(context, contract),
+      completeness: semanticCoverage.completeness,
+      inventoryStrategy: inventoryStrategy(context, scope, target),
+      includePaths: scope.includePaths,
+      excludePaths: scope.excludePaths,
+      reviewedAreas: ((semanticCoverage.surfaces as JsonObject[]) ?? []).map(
+        (surface) => ({
+          label: surface.label,
+          disposition:
+            surface.disposition === "needs_follow_up"
+              ? "follow_up"
+              : surface.disposition === "not_applicable"
+                ? "excluded"
+                : "reviewed",
+          ...(Array.isArray(surface.paths) ? { paths: surface.paths } : {}),
+          ...(Array.isArray(surface.sourceWorkerIds)
+            ? { sourceWorkerIds: surface.sourceWorkerIds }
+            : {}),
+          ...(typeof surface.notes === "string" ? { notes: surface.notes } : {}),
+        }),
+      ),
+      explicitExclusions: semanticCoverage.explicitExclusions,
+      deferred: semanticCoverage.deferred,
+      ...(openQuestions === undefined
+        ? {}
+        : {
+            openQuestions: openQuestions.map((question) =>
+              typeof question === "string"
+                ? { question: question.trim() }
+                : question,
+            ),
+          }),
+    };
+  }
 
   return {
     ...semanticCoverage,
@@ -2566,6 +2685,23 @@ function validateFindingSemantics(findings: JsonObject[]): void {
               "must refer to that finding's existing code-evidence IDs.",
           );
         }
+      }
+    }
+  }
+}
+
+function validateBugFindingSemantics(findings: JsonObject[]): void {
+  for (const [findingIndex, finding] of findings.entries()) {
+    const locations = finding.locations as JsonObject[];
+    for (const [locationIndex, location] of locations.entries()) {
+      if (
+        typeof location.endLine === "number" &&
+        location.endLine < (location.startLine as number)
+      ) {
+        throw new Error(
+          `scan draft: findings[${findingIndex}].locations[${locationIndex}].endLine ` +
+            "must not precede startLine.",
+        );
       }
     }
   }

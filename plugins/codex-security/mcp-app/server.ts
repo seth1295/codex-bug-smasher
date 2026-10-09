@@ -1064,9 +1064,9 @@ export function createCodexSecurityServer(): McpServer {
   server.registerTool(
     "start_codex_security_deep_scan",
     {
-      title: "Start or Join Codex Security Deep Scan",
+      title: "Start or Join Deep Bug Scan",
       description:
-        "Run or rejoin independent Standard security scans and semantically merge their validated findings. Pass scanId and its handoffClaimToken to resume, or targetPath to start headlessly. The call blocks until the aggregate draft is ready, fails, or is canceled. On success, use the returned scanId and scanDir; manifestPath identifies the canonical parent scan-manifest.json. Call complete_codex_security_scan once.",
+        "Run or rejoin a resumable functional bug scan with independent discovery workers, validation evidence, source coverage, and deduplication. Pass scanId and its handoffClaimToken to resume, or targetPath to start headlessly. The call blocks until the aggregate draft is ready, fails, or is canceled. On success, use the returned scanId and scanDir; manifestPath identifies the canonical parent scan-manifest.json. Call complete_codex_security_scan once.",
       inputSchema: startDeepScanSchema,
       annotations: writingAnnotations,
       _meta: modelActionMeta,
@@ -2314,7 +2314,7 @@ function boundedErrorData(error: unknown): { message: string; name: string } {
 function deepScanTerminalResult(run: DeepScanRunState) {
   if (run.status === "succeeded") {
     if (!run.manifestPath) return undefined;
-    const instructions = `Deep Scan discovery completed. Independent Standard scans have already performed validation and attack-path analysis and have been consolidated into the canonical scan-manifest.json, findings.json, and coverage.json under ${run.scanDir}. The returned manifestPath is the canonical scan-manifest.json, not a legacy discovery manifest. Any instructions requiring parent candidate listing, centralized validation, attack-path analysis, or another draft apply only to the old discovery-only workflow and must be skipped. The authoritative scan ID is ${run.scanId}. Immediately call complete_codex_security_scan once using that scan ID to seal and publish the scan. Return output only after completion succeeds and generated report.md exists. If completion fails, surface that exact error and return no final, no-findings, structured, or benchmark response.`;
+    const instructions = `Deep Bug Scan workers have completed functional correctness review, preserved validation evidence and unresolved hypotheses, and deduplicated their results into canonical scan-manifest.json, findings.json, and coverage.json under ${run.scanDir}. The returned manifestPath is the canonical parent scan-manifest.json. Do not run another analysis or submit another draft. The authoritative scan ID is ${run.scanId}. Immediately call complete_codex_security_scan once using that scan ID to seal and publish the scan. Return output only after completion succeeds and generated report.md exists. If completion fails, surface that exact error and return no final, no-findings, structured, or benchmark response.`;
     return {
       content: [{ type: "text" as const, text: instructions }],
       structuredContent: {
@@ -2327,7 +2327,7 @@ function deepScanTerminalResult(run: DeepScanRunState) {
   }
   if (run.status === "canceled") {
     if (run.error?.trim()) return toolErrorResult(deepScanFailureMessage(run));
-    const instructions = `Deep Scan ${run.scanId} was canceled. Saved findings and pending candidates remain available in the scan's retained results. Do not start additional scan work or claim complete coverage.`;
+    const instructions = `Deep Bug Scan ${run.scanId} was canceled. Saved bug findings and deferred hypotheses remain available in the retained results. Do not start additional scan work or claim complete coverage.`;
     return {
       content: [{ type: "text" as const, text: instructions }],
       structuredContent: {
@@ -2655,7 +2655,7 @@ function completionFailureMessage(error: unknown): string {
 
 function deepScanInvocationFailureMessage(error: unknown): string {
   return [
-    "Codex Security Deep Scan discovery did not start or rejoin.",
+    "Functional bug scan discovery did not start or rejoin.",
     failureDiagnostic(error),
     "Stop the current response and surface this exact MCP error.",
     "Do not call start_codex_security_deep_scan again in this response.",

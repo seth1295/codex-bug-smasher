@@ -1211,7 +1211,7 @@ async function testParentToolList(bundle: string) {
             "codex/sandbox-state-meta": sandboxState,
           },
         }),
-        /Codex Security scan not found/,
+        /Functional bug scan discovery did not start or rejoin/,
         "Empty optional Deep Scan context must not override persisted scan authority.",
       );
     }

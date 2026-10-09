@@ -83,11 +83,13 @@ def test_capability_profiles_parse_and_route_top_level_scan_skills() -> None:
     assert data["version"] == 1
     assert set(data["profiles"]) == {
         "deep_security_scan",
+        "functional_bug_scan",
         "security_diff_scan",
         "security_scan",
     }
     assert {route["skill"]: route["profile"] for route in data["routes"]} == {
         "deep-security-scan": "deep_security_scan",
+        "deep-bug-scan": "functional_bug_scan",
         "security-diff-scan": "security_diff_scan",
         "security-scan": "security_scan",
     }
@@ -95,7 +97,7 @@ def test_capability_profiles_parse_and_route_top_level_scan_skills() -> None:
 
 def test_standard_and_deep_scan_profiles_do_not_require_goals() -> None:
     data = tomllib.loads((PLUGIN_ROOT / "preflight" / "capability-profiles.toml").read_text())
-    for profile_id in ("security_scan", "deep_security_scan"):
+    for profile_id in ("security_scan", "deep_security_scan", "functional_bug_scan"):
         profile = data["profiles"][profile_id]
         requirements = {requirement["capability"] for requirement in profile["requirements"]}
         assert requirements.isdisjoint({"goal_tools", "goals_enabled"})
@@ -104,6 +106,7 @@ def test_standard_and_deep_scan_profiles_do_not_require_goals() -> None:
             for patch in profile.get("remediation", {}).get("patches", [])
         )
     assert data["profiles"]["deep_security_scan"]["requirements"] == []
+    assert data["profiles"]["functional_bug_scan"]["requirements"] == []
     assert {
         requirement["capability"]
         for requirement in data["profiles"]["security_diff_scan"]["requirements"]
@@ -122,6 +125,19 @@ def test_deep_scan_does_not_add_capability_requirements_beyond_standard_scan() -
     }
 
     assert deep_requirements.issubset(standard_requirements)
+
+
+def test_functional_bug_scan_does_not_require_security_worker_skills() -> None:
+    result = run_preflight(
+        "--skill",
+        "deep-bug-scan",
+        *standalone_v1(),
+    )
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["profile"] == "functional_bug_scan"
+    assert payload["status"] == "ready"
+    assert payload["failed"] == []
 
 
 def run_preflight(
@@ -176,7 +192,7 @@ def test_deep_scan_preflight_is_ready_with_required_capabilities(tmp_path: Path)
 
     result = run_preflight(
         "--skill",
-        "deep-security-scan",
+        "deep-bug-scan",
         "--config",
         str(config_path),
         "--runtime-check",

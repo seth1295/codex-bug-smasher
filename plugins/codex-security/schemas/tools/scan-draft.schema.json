@@ -589,6 +589,110 @@
       ],
       "additionalProperties": true
     },
+    "bugFinding": {
+      "type": "object",
+      "properties": {
+        "findingId": false,
+        "occurrenceId": false,
+        "fingerprints": false,
+        "ruleId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]*$"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "title": {
+          "$ref": "#/$defs/text"
+        },
+        "summary": {
+          "$ref": "#/$defs/text"
+        },
+        "priority": {
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "category": {
+          "$ref": "#/$defs/text"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        },
+        "expected": {
+          "$ref": "#/$defs/text"
+        },
+        "actual": {
+          "$ref": "#/$defs/text"
+        },
+        "impact": {
+          "$ref": "#/$defs/text"
+        },
+        "rootCause": {
+          "$ref": "#/$defs/text"
+        },
+        "reachability": {
+          "anyOf": [
+            {"$ref": "#/$defs/text"},
+            {
+              "type": "object",
+              "properties": {
+                "entrypoint": {"$ref": "#/$defs/text"},
+                "steps": {"$ref": "#/$defs/textList"},
+                "preconditions": {"$ref": "#/$defs/textList"}
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "status": {"const": "validated"},
+            "method": {"$ref": "#/$defs/text"},
+            "evidence": {"$ref": "#/$defs/textList"},
+            "reproduction": {"$ref": "#/$defs/textList"},
+            "counterEvidence": {"$ref": "#/$defs/textList"},
+            "limitations": {"$ref": "#/$defs/textList"}
+          },
+          "required": ["status", "method", "evidence"],
+          "additionalProperties": true
+        },
+        "suggestedCorrection": {
+          "$ref": "#/$defs/text"
+        },
+        "tests": {
+          "$ref": "#/$defs/textList"
+        },
+        "provenance": {
+          "$ref": "#/$defs/finding/properties/provenance"
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "ruleId",
+        "title",
+        "summary",
+        "priority",
+        "category",
+        "confidence",
+        "locations",
+        "expected",
+        "actual",
+        "impact",
+        "validation",
+        "provenance"
+      ],
+      "additionalProperties": false
+    },
     "scope": {
       "type": "object",
       "properties": {
@@ -851,6 +955,9 @@
         "scanId": {
           "$ref": "#/$defs/scanId"
         },
+        "reviewType": {
+          "const": "functional_bug"
+        },
         "handoffClaimToken": {
           "$ref": "#/$defs/handoffClaimToken"
         },
@@ -863,7 +970,10 @@
         "findings": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/finding"
+            "anyOf": [
+              {"$ref": "#/$defs/finding"},
+              {"$ref": "#/$defs/bugFinding"}
+            ]
           }
         },
         "coverage": {
@@ -871,6 +981,23 @@
         }
       },
       "required": ["scanId", "findings", "coverage"],
+      "additionalProperties": false
+    },
+    "bugScanDraftInput": {
+      "type": "object",
+      "properties": {
+        "complete": {"type": "boolean"},
+        "scanId": {"$ref": "#/$defs/scanId"},
+        "reviewType": {"const": "functional_bug"},
+        "handoffClaimToken": {"$ref": "#/$defs/handoffClaimToken"},
+        "scope": {"$ref": "#/$defs/scope"},
+        "findings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/bugFinding"}
+        },
+        "coverage": {"$ref": "#/$defs/coverage"}
+      },
+      "required": ["scanId", "reviewType", "findings", "coverage"],
       "additionalProperties": false
     },
     "completedScanInput": {

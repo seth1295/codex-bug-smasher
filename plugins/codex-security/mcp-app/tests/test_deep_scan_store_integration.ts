@@ -178,13 +178,21 @@ async function testNoopStoppedRefreshRetainsPublicationFailure() {
 function checkpoint(scanId: string, candidateId: string, reason: string) {
   return {
     scanId,
+    reviewType: "functional_bug",
     complete: false,
     findings: [],
     coverage: {
       completeness: "partial",
       surfaces: [],
       explicitExclusions: [],
-      deferred: [{ candidateId, reason, paths: ["fixture.py"] }],
+      deferred: [
+        {
+          id: candidateId,
+          candidate: { title: `Possible issue ${candidateId}` },
+          evidence: ["The behavior needs another input check."],
+          reason,
+        },
+      ],
     },
   };
 }
@@ -244,7 +252,7 @@ async function testConcurrentParentDraftsPreserveBothCheckpoints() {
     assert.deepEqual(
       new Set(
         coverage.deferred.map(
-          (item: { candidateId: string }) => item.candidateId,
+          (item: { id: string }) => item.id,
         ),
       ),
       new Set(["concurrent-a", "concurrent-b"]),
@@ -311,7 +319,7 @@ async function testLateParentDraftPreservesCheckpointWithoutOverwritingTerminalS
     assert.equal(stopped.scan.progress.status, "canceled");
     const coverage = await readJson(run.scanDir, "coverage.json");
     const pending = coverage.deferred.map(
-      (item: { candidateId: string }) => item.candidateId,
+      (item: { id: string }) => item.id,
     );
     assert.ok(pending.includes("early-result"));
     assert.ok(

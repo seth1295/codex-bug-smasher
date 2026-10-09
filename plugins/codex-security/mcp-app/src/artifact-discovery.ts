@@ -113,6 +113,11 @@ export async function recordCodexSecurityDiscoveryCandidates(
   input: DiscoveryCandidatesInput,
   context: ArtifactContext,
 ): Promise<RecordCodexSecurityDiscoveryCandidatesResult> {
+  if (context.mode === "deep") {
+    throw new Error(
+      "Security candidate ledgers are unavailable during functional bug scans.",
+    );
+  }
   const { candidates } = discoveryCandidatesInputSchema.parse(input);
   const pluginRoot = context.pluginRoot?.trim();
   if (!pluginRoot) {
@@ -215,6 +220,11 @@ export async function listCodexSecurityCandidates(
   input: ListCodexSecurityCandidatesInput,
   context: ArtifactContext,
 ): Promise<ListCodexSecurityCandidatesResult> {
+  if (context.mode === "deep") {
+    throw new Error(
+      "Security candidate ledgers are unavailable during functional bug scans.",
+    );
+  }
   const page = listCodexSecurityCandidatesInputSchema.parse(input);
   const rows = await readArtifactJsonl(
     context,

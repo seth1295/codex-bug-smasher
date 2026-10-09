@@ -15,6 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { importSource } from "./import-module.ts";
 
@@ -27,7 +28,7 @@ const {
   workbenchDiscoveryCandidatesInputSchema,
   workbenchListCodexSecurityCandidatesInputSchema,
 } = await importSource(
-  new URL("../src/artifact-discovery.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-discovery.ts", import.meta.url)),
 );
 
 const pluginRoot = path.join(import.meta.dirname, "../../");
@@ -42,6 +43,14 @@ const toolSchemas = await readJson(
   "schemas",
   "tools",
   "discovery-candidates.schema.json",
+);
+
+await assert.rejects(
+  recordCodexSecurityDiscoveryCandidates(
+    { candidates: [] },
+    { root: "/scan", repoRoot: "/repo", layout: "scan", mode: "deep" },
+  ),
+  /Security candidate ledgers are unavailable during functional bug scans/,
 );
 
 assert.equal(

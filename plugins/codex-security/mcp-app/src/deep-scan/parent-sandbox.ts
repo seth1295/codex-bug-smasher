@@ -186,7 +186,14 @@ function validateSandboxCwd(value: unknown): void {
   }
   if (value.startsWith("file:")) {
     try {
-      if (isAbsolute(fileURLToPath(value))) return;
+      const url = new URL(value);
+      if (
+        url.protocol === "file:" &&
+        (url.hostname === "" || url.hostname.toLowerCase() === "localhost") &&
+        isAbsolute(fileURLToPath(url))
+      ) {
+        return;
+      }
     } catch {
       throw unsupportedParentSandbox(
         "the parent sandbox working directory is invalid",

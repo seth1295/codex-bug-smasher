@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Bug Scan"
+  short_description: "Find and validate functional correctness bugs"
+  default_prompt: "Use $codex-security:deep-bug-scan to run a resumable functional bug scan."
