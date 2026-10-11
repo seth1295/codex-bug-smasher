@@ -2646,25 +2646,10 @@ def scan_context(
     return context
 
 
-def sealed_bug_findings(connection, scan: sqlite3.Row) -> dict[str, Any] | None:
-    if (scan["mode"], scan["status"]) != ("deep", "complete"):
-        return None
-    artifact = connection.execute(
-        "SELECT path FROM scan_artifacts WHERE scan_id = ? AND kind = 'manifest'",
-        (scan["id"],),
-    ).fetchone()
-    if artifact is None:
-        return None
-    scan_dir = Path(scan["scan_dir"])
-    path = available_artifact_path(scan_dir, Path(artifact["path"]))
-    if path is None:
-        return None
-    saved_scan = read_json_object(path).get("scan")
-    if not isinstance(saved_scan, dict) or saved_scan.get("reviewType") != "functional_bug":
-        return None
-    manifest, findings, _, _ = _read_sealed_scan(scan_dir, None, "saved bug scan")
-    verify_manifest_binding(scan, manifest)
-    return findings
+def sealed_bug_findings(
+    connection: sqlite3.Connection, scan: sqlite3.Row
+) -> dict[str, Any] | None:
+    return saved_results.sealed_bug_findings(_WORKBENCH_DB_CONTEXT, connection, scan)
 
 
 def list_findings(connection: sqlite3.Connection, args: argparse.Namespace) -> dict[str, Any]:
@@ -2876,6 +2861,11 @@ def scan_result(
         "failureMessage": scan["failure_message"],
         "findings": indexed_findings,
         **({"bugs": indexed_findings} if bug_findings_document is not None else {}),
+        **(
+            {"hypotheses": bug_findings_document["hypotheses"]}
+            if bug_findings_document is not None
+            else {}
+        ),
         "findingCount": finding_count,
         "findingsTruncated": finding_count > len(indexed_findings),
         **(

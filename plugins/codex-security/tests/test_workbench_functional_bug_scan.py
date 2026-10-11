@@ -27,46 +27,20 @@ def begin_functional_bug_scan(
     )
 
 
-def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    codex_home = tmp_path / "codex-home"
-    target = tmp_path / "invoice-fixture"
-    target.mkdir()
-    (target / "invoice.py").write_text(
-        "def prorate(amount, numerator, denominator):\n"
-        "    return numerator // denominator * amount\n"
-    )
-    deep_scan = begin_functional_bug_scan(state_dir, codex_home, target, tmp_path / "scans")[
-        "deepScan"
-    ]
-    scan_id = str(deep_scan["scanId"])
-    scan_dir = Path(str(deep_scan["scanDir"]))
-    persisted_scan = run_workbench(state_dir, "get-scan", "--scan-id", scan_id)["scan"]
-    target_binding = persisted_scan["contract"]["target"]
-    target_kind = target_binding["allowedKinds"][0]
-    target_coordinates = {
-        "kind": target_kind,
-        "targetId": target_binding["targetId"],
-        "displayName": target_binding["displayName"],
-    }
-    if "requiredSnapshotDigest" in target_binding:
-        target_coordinates["snapshotDigest"] = target_binding["requiredSnapshotDigest"]
-    elif target_kind == "git_revision":
-        target_coordinates["revision"] = persisted_scan["targetRevision"]
-    mark_deep_coordinator_succeeded(state_dir, scan_id, scan_dir)
-
-    finding_template = {
-        "ruleId": "invoice.proration.integer-order",
-        "identity": {"anchor": "invoice-proration-integer-order"},
-        "title": "Proration truncates the ratio too early",
+def bug_finding(index: int) -> dict[str, object]:
+    priorities = ("P0", "P1", "P2", "P3")
+    return {
+        "ruleId": f"invoice.proration.integer-order.{index:02d}",
+        "identity": {"anchor": f"invoice-proration-integer-order-{index:02d}"},
+        "title": f"Proration issue {index:02d} truncates the ratio too early",
         "summary": "Integer division runs before the amount is multiplied.",
-        "priority": "P1",
+        "priority": priorities[index % len(priorities)],
         "category": "algorithm",
         "confidence": {
             "level": "high",
             "rationale": "A direct reproduction returns the wrong amount.",
         },
-        "locations": [{"path": "invoice.py", "startLine": 2}],
+        "locations": [{"path": "invoice.py", "startLine": index + 2}],
         "expected": "Prorating 500 cents at two fifths returns 200 cents.",
         "actual": "The implementation returns 0 cents.",
         "impact": "A customer invoice can be undercharged.",
@@ -79,25 +53,20 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         },
         "suggestedCorrection": "Multiply before dividing using the documented rounding rule.",
         "tests": ["Add a regression test for a fractional ratio."],
-        "provenance": {"source": "local_plugin", "sourceFindingIds": ["worker-a:0"]},
+        "provenance": {
+            "source": "local_plugin",
+            "sourceFindingIds": [f"worker-a:{index}"],
+        },
     }
-    priorities = ("P0", "P1", "P2", "P3")
-    findings = [
-        {
-            **finding_template,
-            "ruleId": f"invoice.proration.integer-order.{index:02d}",
-            "identity": {"anchor": f"invoice-proration-integer-order-{index:02d}"},
-            "title": f"Proration issue {index:02d} truncates the ratio too early",
-            "priority": priorities[index % len(priorities)],
-            "locations": [{"path": "invoice.py", "startLine": index + 2}],
-        }
-        for index in range(23)
-    ]
-    deferred = {
-        "id": "possible-overwrite",
-        "candidate": {"title": "Possible concurrent overwrite"},
-        "reason": "The concurrent call ordering could not be proven.",
-    }
+
+
+def write_functional_bug_artifacts(
+    scan_dir: Path,
+    scan_id: str,
+    target_coordinates: dict[str, object],
+    findings: list[dict[str, object]],
+    deferred: dict[str, object],
+) -> None:
     (scan_dir / "scan-manifest.json").write_text(
         json.dumps(
             {
@@ -134,12 +103,52 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         )
     )
 
+
+def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    codex_home = tmp_path / "codex-home"
+    target = tmp_path / "invoice-fixture"
+    target.mkdir()
+    (target / "invoice.py").write_text(
+        "def prorate(amount, numerator, denominator):\n"
+        "    return numerator // denominator * amount\n"
+    )
+    deep_scan = begin_functional_bug_scan(state_dir, codex_home, target, tmp_path / "scans")[
+        "deepScan"
+    ]
+    scan_id = str(deep_scan["scanId"])
+    scan_dir = Path(str(deep_scan["scanDir"]))
+    persisted_scan = run_workbench(state_dir, "get-scan", "--scan-id", scan_id)["scan"]
+    target_binding = persisted_scan["contract"]["target"]
+    target_kind = target_binding["allowedKinds"][0]
+    target_coordinates = {
+        "kind": target_kind,
+        "targetId": target_binding["targetId"],
+        "displayName": target_binding["displayName"],
+    }
+    if "requiredSnapshotDigest" in target_binding:
+        target_coordinates["snapshotDigest"] = target_binding["requiredSnapshotDigest"]
+    elif target_kind == "git_revision":
+        target_coordinates["revision"] = persisted_scan["targetRevision"]
+    mark_deep_coordinator_succeeded(state_dir, scan_id, scan_dir)
+
+    findings = [bug_finding(index) for index in range(23)]
+    deferred = {
+        "id": "possible-overwrite",
+        "candidate": {"title": "Possible concurrent overwrite"},
+        "reason": "The concurrent call ordering could not be proven.",
+    }
+    write_functional_bug_artifacts(
+        scan_dir, scan_id, target_coordinates, findings, deferred
+    )
+
     completed = run_workbench(state_dir, "complete-scan", "--scan-id", scan_id)["scan"]
     assert completed["progress"]["status"] == "complete"
     assert completed["findingCount"] == 23
     assert completed["priorityCounts"] == {"P0": 6, "P1": 6, "P2": 6, "P3": 5}
     assert "severityCounts" not in completed
     assert completed["bugs"][0]["priority"] == "P0"
+    assert completed["hypotheses"] == [deferred]
     assert completed["remediationAvailable"] is False
     assert completed["reportAvailable"] is True
     saved_findings = json.loads((scan_dir / "findings.json").read_text())
@@ -235,6 +244,67 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
     )
     assert missing["returncode"] != 0
     assert "not found in the selected scan" in str(missing["stderr"])
+    with sqlite3.connect(state_dir / "workbench.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM finding_occurrences WHERE scan_id = ?", (scan_id,)
+        ).fetchone() == (0,)
+
+
+def test_canceled_functional_bug_scan_keeps_saved_results(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    codex_home = tmp_path / "codex-home"
+    target = tmp_path / "invoice-fixture"
+    target.mkdir()
+    (target / "invoice.py").write_text("return numerator // denominator * amount\n")
+    deep_scan = begin_functional_bug_scan(state_dir, codex_home, target, tmp_path / "scans")[
+        "deepScan"
+    ]
+    scan_id = str(deep_scan["scanId"])
+    scan_dir = Path(str(deep_scan["scanDir"]))
+    persisted_scan = run_workbench(state_dir, "get-scan", "--scan-id", scan_id)["scan"]
+    target_binding = persisted_scan["contract"]["target"]
+    target_kind = target_binding["allowedKinds"][0]
+    target_coordinates = {
+        "kind": target_kind,
+        "targetId": target_binding["targetId"],
+        "displayName": target_binding["displayName"],
+    }
+    if "requiredSnapshotDigest" in target_binding:
+        target_coordinates["snapshotDigest"] = target_binding["requiredSnapshotDigest"]
+    elif target_kind == "git_revision":
+        target_coordinates["revision"] = persisted_scan["targetRevision"]
+    deferred = {
+        "id": "possible-overwrite",
+        "candidate": {"title": "Possible concurrent overwrite"},
+        "reason": "The concurrent call ordering could not be proven.",
+    }
+    write_functional_bug_artifacts(
+        scan_dir, scan_id, target_coordinates, [bug_finding(1)], deferred
+    )
+
+    run_workbench(
+        state_dir,
+        "cancel-scan",
+        "--scan-id",
+        scan_id,
+        "--thread-id",
+        "thread-functional-bug",
+        environment={"CODEX_HOME": str(codex_home)},
+    )
+    canceled = run_workbench(state_dir, "get-scan", "--scan-id", scan_id)["scan"]
+    assert canceled["progress"]["status"] == "canceled"
+    assert canceled["findingCount"] == 1
+    assert canceled["priorityCounts"] == {"P1": 1}
+    assert canceled["hypotheses"] == [deferred]
+    assert "severityCounts" not in canceled
+    history = run_workbench(
+        state_dir, "list-scans", "--mode", "deep", "--status", "canceled"
+    )["scans"]
+    assert next(item for item in history if item["scanId"] == scan_id)["findingCount"] == 1
+    page = run_workbench(state_dir, "list-findings", "--scan-id", scan_id)["findingsPage"]
+    assert page["total"] == 1
+    assert page["findings"][0]["priority"] == "P1"
+    assert page["findings"][0]["occurrenceId"] == canceled["bugs"][0]["occurrenceId"]
     with sqlite3.connect(state_dir / "workbench.sqlite3") as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM finding_occurrences WHERE scan_id = ?", (scan_id,)
