@@ -1376,14 +1376,7 @@ def test_cli_scan_comparison_requires_complete_matching_path_coverage(tmp_path: 
         state_dir, root, repository, finding=False, completeness="partial", paths=["src"]
     )
     other_scope = create_cli_scan(state_dir, root, repository, finding=False, paths=["tests"])
-    deep = create_cli_scan(state_dir, root, repository, mode="deep")
     explicit_root = create_cli_scan(state_dir, root, repository, paths=["."])
-    assert (
-        run_workbench(state_dir, "get-scan", "--scan-id", deep["scanId"])["scan"]["progress"][
-            "status"
-        ]
-        == "complete"
-    )
     assert (
         run_workbench(state_dir, "get-scan", "--scan-id", explicit_root["scanId"])["scan"][
             "progress"

@@ -1007,6 +1007,13 @@ def test_completed_findings_are_returned_in_bounded_pages(tmp_path: Path) -> Non
     assert completed["findingCount"] == 75
     assert completed["findingsTruncated"] is True
     assert len(completed["findings"]) == 20
+    security_history = run_workbench(
+        state_dir, "list-scans", "--mode", "standard", "--status", "complete"
+    )["scans"]
+    assert (
+        next(item for item in security_history if item["scanId"] == scan_id)["findingCount"]
+        == 75
+    )
     embedded_occurrence_ids = {finding["occurrenceId"] for finding in completed["findings"]}
     second_page = run_workbench(
         state_dir,

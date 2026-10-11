@@ -199,7 +199,10 @@ def _repository_origin(target: Path) -> tuple[str, str] | None:
 
 
 def list_scans(
-    connection: sqlite3.Connection, args: argparse.Namespace | None = None
+    connection: sqlite3.Connection,
+    args: argparse.Namespace | None = None,
+    *,
+    functional_bug_findings: Callable[[sqlite3.Row], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     if os.name == "nt":
         connection.create_function("codex_security_path_key", 1, _windows_path_key)
@@ -341,6 +344,11 @@ def list_scans(
             for row in rows[:limit]
         ]
     }
+    if functional_bug_findings is not None:
+        for listed_scan, row in zip(result["scans"], rows):
+            findings = functional_bug_findings(row)
+            if findings is not None:
+                listed_scan["findingCount"] = len(findings["findings"])
     if limit is not None:
         result.update(
             {
@@ -350,6 +358,44 @@ def list_scans(
             }
         )
     return result
+
+
+def functional_bug_findings_page(
+    scan_id: str,
+    document: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    query = (args.query or "").strip().casefold()
+    findings = [
+        finding
+        for finding in document["findings"]
+        if args.severity is None
+        and args.status in (None, "open")
+        and (
+            not query
+            or any(
+                query in value.casefold()
+                for value in (
+                    finding["title"],
+                    finding["summary"],
+                    *(location["path"] for location in finding["locations"]),
+                )
+            )
+        )
+    ]
+    limit = min(args.limit, FINDINGS_PAGE_MAX)
+    page = findings[args.offset : args.offset + limit]
+    next_offset = args.offset + len(page)
+    return {
+        "findingsPage": {
+            "findings": page,
+            "limit": limit,
+            "nextOffset": next_offset if next_offset < len(findings) else None,
+            "offset": args.offset,
+            "scanId": scan_id,
+            "total": len(findings),
+        }
+    }
 
 
 def list_unmatched_scan_pairs(

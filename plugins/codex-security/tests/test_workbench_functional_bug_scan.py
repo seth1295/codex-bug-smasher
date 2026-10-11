@@ -55,7 +55,7 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         target_coordinates["revision"] = persisted_scan["targetRevision"]
     mark_deep_coordinator_succeeded(state_dir, scan_id, scan_dir)
 
-    finding = {
+    finding_template = {
         "ruleId": "invoice.proration.integer-order",
         "identity": {"anchor": "invoice-proration-integer-order"},
         "title": "Proration truncates the ratio too early",
@@ -81,6 +81,18 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         "tests": ["Add a regression test for a fractional ratio."],
         "provenance": {"source": "local_plugin", "sourceFindingIds": ["worker-a:0"]},
     }
+    priorities = ("P0", "P1", "P2", "P3")
+    findings = [
+        {
+            **finding_template,
+            "ruleId": f"invoice.proration.integer-order.{index:02d}",
+            "identity": {"anchor": f"invoice-proration-integer-order-{index:02d}"},
+            "title": f"Proration issue {index:02d} truncates the ratio too early",
+            "priority": priorities[index % len(priorities)],
+            "locations": [{"path": "invoice.py", "startLine": index + 2}],
+        }
+        for index in range(23)
+    ]
     deferred = {
         "id": "possible-overwrite",
         "candidate": {"title": "Possible concurrent overwrite"},
@@ -99,7 +111,7 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         )
     )
     (scan_dir / "findings.json").write_text(
-        json.dumps({"findings": [finding], "hypotheses": [deferred]})
+        json.dumps({"findings": findings, "hypotheses": [deferred]})
     )
     (scan_dir / "coverage.json").write_text(
         json.dumps(
@@ -124,20 +136,80 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
 
     completed = run_workbench(state_dir, "complete-scan", "--scan-id", scan_id)["scan"]
     assert completed["progress"]["status"] == "complete"
-    assert completed["findingCount"] == 1
-    assert completed["priorityCounts"] == {"P1": 1}
+    assert completed["findingCount"] == 23
+    assert completed["priorityCounts"] == {"P0": 6, "P1": 6, "P2": 6, "P3": 5}
     assert "severityCounts" not in completed
-    assert completed["bugs"][0]["priority"] == "P1"
+    assert completed["bugs"][0]["priority"] == "P0"
     assert completed["remediationAvailable"] is False
     assert completed["reportAvailable"] is True
     saved_findings = json.loads((scan_dir / "findings.json").read_text())
     saved_coverage = json.loads((scan_dir / "coverage.json").read_text())
     assert saved_findings["documentType"] == "functional-bug-scan.findings"
     assert saved_coverage["documentType"] == "functional-bug-scan.coverage"
-    assert saved_findings["findings"][0]["priority"] == "P1"
+    assert saved_findings["findings"][0]["priority"] == "P0"
     assert saved_findings["findings"][0]["validation"]["status"] == "validated"
     assert not {"severity", "taxonomy", "attackPath"}.intersection(saved_findings["findings"][0])
     assert len(saved_findings["hypotheses"]) == 1
+    expected_ids = {item["occurrenceId"] for item in saved_findings["findings"]}
+    assert len(expected_ids) == 23
+    history = run_workbench(
+        state_dir, "list-scans", "--mode", "deep", "--status", "complete"
+    )["scans"]
+    assert next(item for item in history if item["scanId"] == scan_id)["findingCount"] == 23
+    first_page = run_workbench(
+        state_dir, "list-findings", "--scan-id", scan_id
+    )["findingsPage"]
+    second_page = run_workbench(
+        state_dir, "list-findings", "--scan-id", scan_id, "--offset", "20"
+    )["findingsPage"]
+    assert first_page["total"] == second_page["total"] == 23
+    assert first_page["offset"] == 0
+    assert first_page["nextOffset"] == 20
+    assert second_page["offset"] == 20
+    assert second_page["nextOffset"] is None
+    assert len(first_page["findings"]) == 20
+    assert len(second_page["findings"]) == 3
+    page_findings = [*first_page["findings"], *second_page["findings"]]
+    assert {item["priority"] for item in page_findings} == {"P0", "P1", "P2", "P3"}
+    assert all("severity" not in item for item in page_findings)
+    first_page_ids = {item["occurrenceId"] for item in first_page["findings"]}
+    second_page_ids = {item["occurrenceId"] for item in second_page["findings"]}
+    assert first_page_ids.isdisjoint(second_page_ids)
+    assert first_page_ids | second_page_ids == expected_ids
+    queried = run_workbench(
+        state_dir,
+        "list-findings",
+        "--scan-id",
+        scan_id,
+        "--query",
+        "Proration issue 07",
+    )["findingsPage"]
+    assert queried["total"] == 1
+    assert queried["findings"][0]["title"].startswith("Proration issue 07")
+    assert run_workbench(
+        state_dir,
+        "list-findings",
+        "--scan-id",
+        scan_id,
+        "--severity",
+        "high",
+    )["findingsPage"]["total"] == 0
+    assert run_workbench(
+        state_dir,
+        "list-findings",
+        "--scan-id",
+        scan_id,
+        "--status",
+        "open",
+    )["findingsPage"]["total"] == 23
+    assert run_workbench(
+        state_dir,
+        "list-findings",
+        "--scan-id",
+        scan_id,
+        "--status",
+        "closed",
+    )["findingsPage"]["total"] == 0
     occurrence_id = saved_findings["findings"][0]["occurrenceId"]
     selected = run_workbench(
         state_dir,
@@ -147,10 +219,10 @@ def test_functional_bug_scan_is_saved_with_priority_results(tmp_path: Path) -> N
         "--occurrence-id",
         occurrence_id,
     )["scan"]
-    assert selected["findingCount"] == 1
+    assert selected["findingCount"] == 23
     assert selected["findings"] == selected["bugs"]
     assert selected["findings"][0]["occurrenceId"] == occurrence_id
-    assert selected["priorityCounts"] == {"P1": 1}
+    assert selected["priorityCounts"] == {"P0": 6, "P1": 6, "P2": 6, "P3": 5}
     assert "severityCounts" not in selected
     missing = run_workbench(
         state_dir,

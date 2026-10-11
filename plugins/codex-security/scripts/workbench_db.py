@@ -2646,8 +2646,33 @@ def scan_context(
     return context
 
 
+def sealed_bug_findings(connection, scan: sqlite3.Row) -> dict[str, Any] | None:
+    if (scan["mode"], scan["status"]) != ("deep", "complete"):
+        return None
+    artifact = connection.execute(
+        "SELECT path FROM scan_artifacts WHERE scan_id = ? AND kind = 'manifest'",
+        (scan["id"],),
+    ).fetchone()
+    if artifact is None:
+        return None
+    scan_dir = Path(scan["scan_dir"])
+    path = available_artifact_path(scan_dir, Path(artifact["path"]))
+    if path is None:
+        return None
+    saved_scan = read_json_object(path).get("scan")
+    if not isinstance(saved_scan, dict) or saved_scan.get("reviewType") != "functional_bug":
+        return None
+    manifest, findings, _, _ = _read_sealed_scan(scan_dir, None, "saved bug scan")
+    verify_manifest_binding(scan, manifest)
+    return findings
+
+
 def list_findings(connection: sqlite3.Connection, args: argparse.Namespace) -> dict[str, Any]:
     scan = require_scan(connection, args.scan_id)
+    bug_document = sealed_bug_findings(connection, scan)
+    if bug_document is not None:
+        return scan_history.functional_bug_findings_page(scan["id"], bug_document, args)
+
     backfill_legacy_finding_details(connection, scan)
     limit = min(args.limit, FINDINGS_PAGE_MAX)
     rows = scan_history.finding_occurrence_rows(
@@ -2716,17 +2741,7 @@ def scan_result(
     model_fields = saved_results.threat_model_fields(_WORKBENCH_DB_CONTEXT, scan)
     if path := model_fields.get("threatModelPath"):
         artifacts["threatModel"] = path
-    bug_findings_document: dict[str, Any] | None = None
-    if scan["mode"] == "deep" and scan["status"] == "complete":
-        manifest_path = artifacts.get("manifest")
-        if manifest_path:
-            saved_manifest = read_json_object(Path(str(manifest_path)))
-            saved_scan = saved_manifest.get("scan")
-            if isinstance(saved_scan, dict) and saved_scan.get("reviewType") == "functional_bug":
-                manifest, bug_findings_document, _, _ = _read_sealed_scan(
-                    Path(scan["scan_dir"]), None, "saved functional bug scan"
-                )
-                verify_manifest_binding(scan, manifest)
+    bug_findings_document = sealed_bug_findings(connection, scan)
     selected_bug: dict[str, Any] | None = None
     if bug_findings_document is not None and occurrence_id is not None:
         selected_bug = next(
@@ -3455,7 +3470,11 @@ def main() -> None:
         elif args.command == "get-scan-feedback":
             result = get_scan_feedback(connection, require_scan(connection, args.scan_id))
         elif args.command == "list-scans":
-            result = scan_history.list_scans(connection, args)
+            result = scan_history.list_scans(
+                connection,
+                args,
+                functional_bug_findings=lambda scan: sealed_bug_findings(connection, scan),
+            )
         elif args.command == "list-unmatched-scan-pairs":
             result = scan_history.list_unmatched_scan_pairs(
                 connection,
