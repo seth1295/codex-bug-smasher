@@ -1287,7 +1287,17 @@ export class CodexSecurity {
       checkOpen();
 
       const session = await this.#prepareSession(
-        { protectedRoot },
+        {
+          protectedRoot,
+          readOnlyRoots:
+            mode !== "deep"
+              ? []
+              : normalized.kind === "paths"
+                ? normalized.paths.map((path) => resolve(repo, path))
+                : normalized.kind === "repository"
+                  ? [repo]
+                  : [],
+        },
         options,
         signal,
         temporaryRoot,
@@ -1903,6 +1913,10 @@ export class CodexSecurity {
         runtimePaths,
         options.auth,
         git,
+        undefined,
+        mode === "deep"
+          ? [scanPermissionProfileConfigOverride(session.sessionConfig)]
+          : [],
       );
       const threadOptions: ThreadOptions = {
         threadSource: CODEX_SECURITY_THREAD_SOURCES.scan,
@@ -2687,8 +2701,8 @@ export class CodexSecurity {
       environment[SAFETY_IDENTIFIER_ENV] = session.safetyIdentifier;
     }
     const sdkCodexConfig = { ...(config ?? sessionConfig) };
-    // Projects and permissions already live in generated TOML files; the SDK
-    // cannot safely encode their path and selector keys as dotted overrides.
+    // Projects and permission profiles contain literal path selectors; keep
+    // them out of structured overrides and pass scan-specific permissions raw.
     delete sdkCodexConfig["projects"];
     delete sdkCodexConfig["permissions"];
     if (commandAuth) delete sdkCodexConfig["model_providers"];
@@ -2741,9 +2755,11 @@ export class CodexSecurity {
     {
       protectedRoot,
       protectedRoots = [protectedRoot],
+      readOnlyRoots = [],
     }: {
       protectedRoot: string;
       protectedRoots?: readonly string[];
+      readOnlyRoots?: readonly string[];
     },
     options: Pick<
       ScanOptions,
@@ -2857,6 +2873,7 @@ export class CodexSecurity {
       const sessionConfig = scanRuntimeCodexConfig(
         effectiveConfig,
         runtimeHome,
+        readOnlyRoots,
       );
       if (
         options.expectedPluginVersion !== undefined &&
@@ -4573,7 +4590,16 @@ export function classifyConnectionFailure(
 export function scanRuntimeCodexConfig(
   config: JsonObject,
   protectedCredentialHome?: string,
+  readOnlyRoots: readonly string[] = [],
 ): JsonObject {
+  const validatedReadOnlyRoots = readOnlyRoots.map((root) => {
+    if (!isAbsolute(root)) {
+      throw new ConfigurationError(
+        "A scan read-only root must be an absolute path.",
+      );
+    }
+    return resolve(root);
+  });
   const approvalPolicy = scanApprovalPolicy(config);
   const hardened = structuredClone(config);
   delete hardened["sandbox_mode"];
@@ -4604,6 +4630,9 @@ export function scanRuntimeCodexConfig(
           ...(protectedCredentialHome === undefined
             ? {}
             : { [protectedCredentialHome]: "read" }),
+          ...Object.fromEntries(
+            validatedReadOnlyRoots.map((root) => [root, { ".": "read" }]),
+          ),
         },
       },
       [POLICY_PERMISSION_PROFILE]: {
@@ -4612,6 +4641,19 @@ export function scanRuntimeCodexConfig(
       },
     },
   };
+}
+
+function scanPermissionProfileConfigOverride(config: JsonObject): string {
+  const permissions = config["permissions"];
+  const profile = isRecord(permissions)
+    ? permissions[SCAN_PERMISSION_PROFILE]
+    : undefined;
+  if (!isRecord(profile)) {
+    throw new ConfigurationError(
+      "The scan permission profile could not be serialized for the active session.",
+    );
+  }
+  return `permissions.${SCAN_PERMISSION_PROFILE}=${inlineToml(profile as JsonObject)}`;
 }
 
 function policyFilesystemPermissions(

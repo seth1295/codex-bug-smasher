@@ -2708,10 +2708,13 @@ describe("CodexSecurity orchestration", () => {
     const ambientHome = join(root, "ambient-home");
     const codexHome = join(root, "runtime-home");
     const scanDir = join(root, "scan");
+    const selectedPath = join(repository, "src", "invoice_math.py");
     const sourcePluginRoot = fileURLToPath(
       new URL("../../../plugins/codex-security/", import.meta.url),
     );
     await mkdir(repository);
+    await mkdir(dirname(selectedPath), { recursive: true });
+    await writeFile(selectedPath, "def prorate(): return 0\n");
     await mkdir(join(ambientHome, "codex-security"), { recursive: true });
     await mkdir(codexHome);
     await mkdir(scanDir, { mode: 0o700 });
@@ -2730,6 +2733,7 @@ describe("CodexSecurity orchestration", () => {
       ].join("\n"),
     );
     let recipe: Record<string, unknown> | undefined;
+    const capturedDeepPermissionOverrides: string[] = [];
     const client = new TestClient(
       {},
       {
@@ -2772,6 +2776,9 @@ describe("CodexSecurity orchestration", () => {
             model: "gpt-6-luna",
             model_reasoning_effort: "xhigh",
           });
+          capturedDeepPermissionOverrides.push(
+            ...(options.configOverrides ?? []),
+          );
           return codexFactory(deepSettingsCaptured)();
         },
       },
@@ -2780,6 +2787,7 @@ describe("CodexSecurity orchestration", () => {
     await expect(
       client.run(repository, {
         mode: "deep",
+        target: ["src/invoice_math.py"],
         auth: "auto",
         workers: 2,
         subagents: 0,
@@ -2788,6 +2796,19 @@ describe("CodexSecurity orchestration", () => {
         maxTimeHours: 1.5,
       }),
     ).rejects.toThrow("deep scan settings captured");
+    const permissionOverrides = capturedDeepPermissionOverrides.filter(
+      (override) => override.startsWith("permissions.codex_security_scan="),
+    );
+    expect(permissionOverrides).toHaveLength(1);
+    const selectedReadRoot = await realpath(selectedPath);
+    expect(
+      parseToml(permissionOverrides[0]!).permissions.codex_security_scan
+        .filesystem[selectedReadRoot],
+    ).toEqual({ ".": "read" });
+    expect(
+      parseToml(permissionOverrides[0]!).permissions.codex_security_scan
+        .filesystem[repository],
+    ).toBeUndefined();
     const configuration = await readFile(
       join(codexHome, "codex-security", "config.toml"),
       "utf8",

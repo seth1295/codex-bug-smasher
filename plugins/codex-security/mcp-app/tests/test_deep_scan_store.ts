@@ -978,6 +978,13 @@ function stateResult(
       status: "running",
       targetPath: "/fixture/repository",
       scope: ".",
+      sourceReadPaths: Array.isArray(deepScanOverride.sourceReadPaths)
+        ? deepScanOverride.sourceReadPaths
+        : [
+            typeof deepScanOverride.scope === "string"
+              ? deepScanOverride.scope
+              : ".",
+          ],
       userContext: null,
       scanDir: "/fixture/scans/run",
       ...deepScanOverride,

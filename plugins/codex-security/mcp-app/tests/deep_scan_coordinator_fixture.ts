@@ -37,7 +37,7 @@ export const {
       export * from "./registry.ts";
       export { classifyCodexWorkerError } from "./errors.ts";
     `,
-      resolveDir: fileURLToPath(new URL("../src/deep-scan/", import.meta.url)),
+    resolveDir: fileURLToPath(new URL("../src/deep-scan/", import.meta.url)),
   },
   loader: { ".md": "text" },
 });
@@ -69,6 +69,7 @@ export async function fixtureRun(
       status: "running" as const,
       targetPath: path.join(root, "target"),
       scope: ".",
+      sourceReadPaths: ["."],
       scanDir: path.join(root, "scan"),
       config: {
         workers: 1,
@@ -655,9 +656,7 @@ async function writeDedupArtifacts(
     mergedFindings.set(findingIdentity, {
       ...mergedFindings.get(findingIdentity),
       ...finding,
-      ...(options.evidence === undefined
-        ? {}
-        : { summary: options.evidence }),
+      ...(options.evidence === undefined ? {} : { summary: options.evidence }),
       provenance: {
         ...finding.provenance,
         sourceFindingIds: [
@@ -713,7 +712,8 @@ export function standardScanDraft(
               rationale: "A focused reproduction shows the wrong output.",
             },
             locations: [{ path: "fixture.py", startLine: 1, endLine: 1 }],
-            expected: "The function returns the documented result for the input.",
+            expected:
+              "The function returns the documented result for the input.",
             actual: "The function returns an incorrect value.",
             impact: "The caller receives incorrect data.",
             validation: {
@@ -722,7 +722,8 @@ export function standardScanDraft(
               evidence: ["The fixture input produced an incorrect output."],
               counterEvidence: [],
             },
-            suggestedCorrection: "Correct the operation at the source location.",
+            suggestedCorrection:
+              "Correct the operation at the source location.",
             tests: ["Add a regression test for this input."],
             provenance: {
               source: "local_plugin",

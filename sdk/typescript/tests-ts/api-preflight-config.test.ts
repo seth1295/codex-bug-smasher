@@ -476,6 +476,42 @@ describe("CodexSecurity preflight configuration", () => {
     expect(policyFilesystem).not.toHaveProperty(credentialHome);
   });
 
+  test("adds an explicit target read root without changing other scan roots", () => {
+    const stateDirectory = join(tmpdir(), "codex-security-target-read-state");
+    const credentialHome = join(stateDirectory, "codex-home");
+    const repository = join(tmpdir(), "codex-security-target-read-repository");
+    const literalPath = join(repository, "src", "invoice[*]?.py");
+    const config = scanRuntimeCodexConfig({}, credentialHome, [
+      repository,
+      literalPath,
+    ]);
+    const filesystem = (
+      (config["permissions"] as JsonObject)["codex_security_scan"] as JsonObject
+    )["filesystem"] as JsonObject;
+
+    expect(filesystem).toEqual({
+      ":root": "read",
+      ":workspace_roots": "write",
+      [credentialHome]: "read",
+      [repository]: { ".": "read" },
+      [literalPath]: { ".": "read" },
+    });
+    expect(
+      (
+        (
+          (
+            scanRuntimeCodexConfig({}, credentialHome)[
+              "permissions"
+            ] as JsonObject
+          )["codex_security_scan"] as JsonObject
+        )["filesystem"] as JsonObject
+      )[repository],
+    ).toBeUndefined();
+    expect(() =>
+      scanRuntimeCodexConfig({}, undefined, ["relative/path"]),
+    ).toThrow("absolute path");
+  });
+
   test("preserves an explicitly requested strict approval policy", () => {
     expect(
       scanRuntimeCodexConfig({

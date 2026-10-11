@@ -56,6 +56,8 @@ const temporaryDirectories = createTemporaryDirectories();
 const previousMarker = process.env.FAKE_CODEX_MARKER;
 const trustedParentSandbox = Object.freeze({
   filesystemDenies: [],
+  filesystemReadRoots: [],
+  filesystemUnrestricted: true,
 });
 const trustedParentSandboxWithDenials = Object.freeze({
   filesystemDenies: [
@@ -64,6 +66,8 @@ const trustedParentSandboxWithDenials = Object.freeze({
     "/repo/**/*.pem",
     "/repo/.env",
   ],
+  filesystemReadRoots: [],
+  filesystemUnrestricted: true,
   globScanMaxDepth: 3,
 });
 const emptyWorkerPermissionProfile = {
@@ -1104,10 +1108,35 @@ async function testWorkerRuntimeSettings() {
     delete process.env.CODEX_API_KEY;
     for (const [configuration, expected] of cases) {
       const fixture = await fakeCodexFixture(
-        deniedWorkerPermissionProfile,
+        (root) => ({
+          extends: ":read-only",
+          filesystem: {
+            ":root": "read",
+            [path.join(root, "target", "src", "invoice_math.py")]: "read",
+            [path.join(root, "plugin")]: "read",
+            "/repo/.env": "deny",
+            "/repo/**/.secret": "deny",
+            "/repo/**/*.pem": "deny",
+            glob_scan_max_depth: 3,
+          },
+          network: { enabled: false },
+        }),
         true,
         { account: null, requiresOpenaiAuth: false },
       );
+      const repoRoot = path.join(fixture.root, "target");
+      const sourceReadRoot = path.join(repoRoot, "src", "invoice[one].py");
+      const pluginRoot = path.join(fixture.root, "plugin");
+      const workerOutputDirectory = path.join(fixture.root, "worker-output");
+      const reducerOutputDirectory = path.join(fixture.root, "reducer-output");
+      await Promise.all([
+        mkdir(repoRoot),
+        mkdir(pluginRoot),
+        mkdir(workerOutputDirectory),
+        mkdir(reducerOutputDirectory),
+      ]);
+      await mkdir(path.dirname(sourceReadRoot), { recursive: true });
+      await writeFile(sourceReadRoot, "def prorate(): return 0\n");
       const python = path.join(fixture.root, "selected venv", "bin", "python");
       const helperPython = path.join(
         fixture.root,
@@ -1194,10 +1223,15 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
         (modelSettings) =>
           new CodexSdkWorkerExecutor({
             ...modelSettings,
-            parentSandbox: trustedParentSandboxWithDenials,
+            parentSandbox: {
+              ...trustedParentSandboxWithDenials,
+              filesystemReadRoots: [sourceReadRoot, pluginRoot],
+              filesystemUnrestricted: false,
+            },
             artifactContext: {
-              pluginRoot: fixture.root,
-              repoRoot: fixture.root,
+              pluginRoot,
+              repoRoot,
+              sourceReadRoots: [sourceReadRoot],
               scanId: `fixture-scan-${modelSettings.model ?? "inherited"}`,
               pythonCommand: helperPython,
             },
@@ -1218,11 +1252,14 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               return executor.run({
                 kind,
                 promptPath,
-                workingDirectory: fixture.root,
-                subagents: 0,
+                workingDirectory: workerOutputDirectory,
+                subagents: kind === "dedup" ? 0 : 1,
                 resumeThreadId,
                 artifactContext: {
-                  root: fixture.root,
+                  root:
+                    kind === "dedup"
+                      ? reducerOutputDirectory
+                      : workerOutputDirectory,
                   layout: kind === "dedup" ? "reducer" : "worker",
                   ...(kind === "dedup"
                     ? {
@@ -1273,9 +1310,40 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               workerLaunch.environment!.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
               process.env.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
             );
+            const workerProfile = workerPermissionProfileOverride(
+              workerLaunch.args,
+            );
             assert.equal(
-              workerPermissionProfileOverride(workerLaunch.args),
-              'permissions.codex_security_deep_scan_worker={extends=":read-only",filesystem={":root"="read","/repo/.env"="deny","/repo/**/.secret"="deny","/repo/**/*.pem"="deny",glob_scan_max_depth=3},network={enabled=false}}',
+              workerProfile.includes(
+                `${JSON.stringify(sourceReadRoot)}={"."="read"}`,
+              ),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes(
+                `${JSON.stringify(repoRoot)}={"."="read"}`,
+              ),
+              false,
+            );
+            assert.equal(
+              workerProfile.includes(
+                `${JSON.stringify(pluginRoot)}={"."="read"}`,
+              ),
+              true,
+            );
+            assert.ok(
+              workerProfile.indexOf(
+                `${JSON.stringify(sourceReadRoot)}={"."="read"}`,
+              ) < workerProfile.indexOf('"/repo/.env"="deny"'),
+            );
+            assert.equal(workerProfile.includes('"/repo/.env"="deny"'), true);
+            assert.equal(
+              workerProfile.includes('"/repo/**/.secret"="deny"'),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes('"/repo/**/*.pem"="deny"'),
+              true,
             );
             const invocation = await readJson(workerLaunch.markerPath);
             assert.equal(invocation.providerKey, providerKeys[index]);
@@ -1319,8 +1387,12 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               invocation.deepConfigPath,
               process.env.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
             );
+            assertFlagPair(invocation.argv, "--cd", workerOutputDirectory);
             assertReadOnlyWorkerPolicy(invocation.argv);
-            assertWorkerSubagentPolicy(invocation.argv, 0);
+            assertWorkerSubagentPolicy(
+              invocation.argv,
+              kind === "dedup" ? 0 : 1,
+            );
           }
           for (const launch of launches.filter(({ args }) =>
             args.includes("app-server"),
@@ -1332,6 +1404,67 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               workerPermissionProfileOverride(workerLaunches[0].args),
             );
           }
+          const launchCountBeforeDeniedRoot = launches.length;
+          await assert.rejects(
+            new CodexSdkWorkerExecutor({
+              model: "fixture-denied-target-model",
+              parentSandbox: {
+                filesystemDenies: [repoRoot],
+                filesystemReadRoots: [sourceReadRoot, pluginRoot],
+                filesystemUnrestricted: false,
+              },
+              artifactContext: {
+                pluginRoot,
+                repoRoot,
+                sourceReadRoots: [sourceReadRoot],
+                scanId: "fixture-denied-target",
+              },
+            }).run({
+              kind: "discovery",
+              promptPath,
+              workingDirectory: workerOutputDirectory,
+              subagents: 1,
+              artifactContext: {
+                root: workerOutputDirectory,
+                layout: "worker",
+              },
+              signal: new AbortController().signal,
+            }),
+            (error: Error) =>
+              error instanceof DeepScanNonRetryableError &&
+              error.message.includes("denied by the parent filesystem policy"),
+          );
+          assert.equal(launches.length, launchCountBeforeDeniedRoot);
+          await assert.rejects(
+            new CodexSdkWorkerExecutor({
+              model: "fixture-ungranted-target-model",
+              parentSandbox: {
+                filesystemDenies: [],
+                filesystemReadRoots: [],
+                filesystemUnrestricted: false,
+              },
+              artifactContext: {
+                pluginRoot,
+                repoRoot,
+                sourceReadRoots: [sourceReadRoot],
+                scanId: "fixture-ungranted-target",
+              },
+            }).run({
+              kind: "discovery",
+              promptPath,
+              workingDirectory: workerOutputDirectory,
+              subagents: 1,
+              artifactContext: {
+                root: workerOutputDirectory,
+                layout: "worker",
+              },
+              signal: new AbortController().signal,
+            }),
+            (error: Error) =>
+              error instanceof DeepScanNonRetryableError &&
+              error.message.includes("outside the parent filesystem grants"),
+          );
+          assert.equal(launches.length, launchCountBeforeDeniedRoot);
           await writeFile(configPath, 'model_reasoning_summary = "detailed"\n');
         }
       }
@@ -1617,6 +1750,7 @@ async function testArtifactServerUsesExtendedStartupTimeout() {
       artifactContext: {
         pluginRoot: fixture.root,
         repoRoot: fixture.root,
+        sourceReadRoots: [fixture.root],
         scanId: "fixture-scan-id",
       },
     }).run({
@@ -2137,7 +2271,11 @@ async function runFixtureWorker(
 }
 
 async function fakeCodexFixture(
-  preflightProfile = emptyWorkerPermissionProfile,
+  preflightProfile:
+    | Readonly<Record<string, unknown>>
+    | ((
+        root: string,
+      ) => Readonly<Record<string, unknown>>) = emptyWorkerPermissionProfile,
   preflightAllowed = true,
   accountResult: {
     account: { type: string } | null;
@@ -2147,6 +2285,10 @@ async function fakeCodexFixture(
   const root = await temporaryDirectories.create(
     "codex-security-sdk-executor-",
   );
+  const expectedPreflightProfile =
+    typeof preflightProfile === "function"
+      ? preflightProfile(root)
+      : preflightProfile;
   const markerPath = path.join(root, "invocation.json");
   const preflightMarkerPath = path.join(root, "preflight.json");
   const scriptPath = path.join(root, "fake-codex.mjs");
@@ -2155,7 +2297,7 @@ async function fakeCodexFixture(
     `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-const preflightProfile = ${JSON.stringify(preflightProfile)};
+const preflightProfile = ${JSON.stringify(expectedPreflightProfile)};
 const preflightAllowed = ${JSON.stringify(preflightAllowed)};
 const accountResult = ${JSON.stringify(accountResult)};
 const preflightMarkerPath = process.env.FAKE_CODEX_PREFLIGHT_MARKER ?? ${JSON.stringify(preflightMarkerPath)};

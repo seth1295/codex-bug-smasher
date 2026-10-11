@@ -1458,6 +1458,7 @@ def test_sdk_scan_begin_claims_its_existing_scan(tmp_path: Path) -> None:
     assert begun["deepScan"]["scanId"] == scan_id
     assert begun["deepScan"]["scanDir"] == str(scan_dir)
     assert begun["deepScan"]["userContext"] == user_context
+    assert begun["deepScan"]["sourceReadPaths"] == ["."]
     with sqlite3.connect(state_dir / "workbench.sqlite3") as connection:
         assert connection.execute("SELECT COUNT(*) FROM scans").fetchone() == (1,)
         assert connection.execute("SELECT thread_id FROM workspaces").fetchone() == ("sdk-thread",)
@@ -1476,6 +1477,64 @@ def test_sdk_scan_begin_claims_its_existing_scan(tmp_path: Path) -> None:
         check=False,
     )
     assert "owning Codex thread" in str(rejected["stderr"])
+
+
+def test_sdk_path_scan_persists_selected_source_read_paths(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    codex_home = tmp_path / "codex-home"
+    target = tmp_path / "target"
+    source = target / "src" / "invoice_math.py"
+    test_file = target / "tests" / "test_invoice_math.py"
+    source.parent.mkdir(parents=True)
+    test_file.parent.mkdir(parents=True)
+    source.write_text("def prorate(): return 0\n")
+    test_file.write_text("def test_prorate(): pass\n")
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir(mode=0o700)
+    target_paths = ["src/invoice_math.py", "tests/test_invoice_math.py"]
+    registered = run_workbench(
+        state_dir,
+        "register-cli-scan",
+        "--scan-dir",
+        str(scan_dir),
+        "--repository",
+        str(target),
+        "--registration-json-stdin",
+        input_text=json.dumps(
+            {
+                "recipe": {
+                    "config": {},
+                    "mode": "deep",
+                    "repository": str(target),
+                    "target": {"kind": "paths", "paths": target_paths},
+                },
+            }
+        ),
+    )
+    scan_id = str(registered["scanId"])
+    begun = run_workbench(
+        state_dir,
+        "begin-deep-scan",
+        "--thread-id",
+        "sdk-path-thread",
+        "--scan-id",
+        scan_id,
+        environment=deep_environment(codex_home),
+    )
+
+    assert begun["deepScan"]["targetPath"] == str(target)
+    assert begun["deepScan"]["sourceReadPaths"] == target_paths
+
+    resumed = run_workbench(
+        state_dir,
+        "get-deep-scan",
+        "--scan-id",
+        scan_id,
+        "--thread-id",
+        "sdk-path-thread",
+        environment=deep_environment(codex_home),
+    )
+    assert resumed["deepScan"]["sourceReadPaths"] == target_paths
 
 
 def test_sdk_scan_rejects_invalid_handoff_before_claiming_ownership(tmp_path: Path) -> None:

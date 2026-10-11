@@ -37,6 +37,7 @@ import {
   resolveDeepWorkerParentSandbox,
   type DeepWorkerParentSandbox,
 } from "./src/deep-scan/parent-sandbox.js";
+import { resolveDeepScanSourceReadRoots } from "./src/deep-scan/source-read-roots.js";
 import { WorkbenchDeepScanStore } from "./src/deep-scan/store.js";
 import type { DeepScanRunState } from "./src/deep-scan/types.js";
 
@@ -1134,6 +1135,19 @@ export function createCodexSecurityServer(): McpServer {
           }
           const immediate = deepScanTerminalResult(begun);
           if (immediate) return { begun, immediate };
+          let sourceReadRoots: string[] = [];
+          let sourceReadRootsError: string | undefined;
+          try {
+            sourceReadRoots = await resolveDeepScanSourceReadRoots({
+              repoRoot: begun.targetPath,
+              sourceReadPaths: begun.sourceReadPaths,
+            });
+          } catch (error: unknown) {
+            sourceReadRootsError =
+              error instanceof Error
+                ? error.message
+                : "Deep Scan could not establish the selected source read scope.";
+          }
           const started = await startOrJoinDeepScanCoordinator({
             run: begun,
             registry: deepScanCoordinators,
@@ -1145,6 +1159,10 @@ export function createCodexSecurityServer(): McpServer {
                 artifactContext: {
                   pluginRoot: PLUGIN_ROOT,
                   repoRoot: begun.targetPath,
+                  sourceReadRoots,
+                  ...(sourceReadRootsError === undefined
+                    ? {}
+                    : { sourceReadRootsError }),
                   scanId: begun.scanId,
                   scope: begun.scope,
                   pythonCommand: await resolvePythonCommand(),

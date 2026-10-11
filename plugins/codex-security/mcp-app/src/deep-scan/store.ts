@@ -696,6 +696,10 @@ export function parseDeepScan(result: JsonObject): DeepScanRunState {
     updatedAt: optionalString(value.updatedAt),
     targetPath: requiredString(value.targetPath, "deepScan.targetPath"),
     scope: requiredString(value.scope, "deepScan.scope"),
+    sourceReadPaths: requiredStringArray(
+      value.sourceReadPaths,
+      "deepScan.sourceReadPaths",
+    ),
     userContext: optionalString(value.userContext),
     scanDir: requiredString(value.scanDir, "deepScan.scanDir"),
     config,
@@ -880,6 +884,17 @@ function objectValue(value: unknown, field: string): JsonObject {
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value) {
+    throw new Error(`Codex Security workbench returned invalid ${field}.`);
+  }
+  return value;
+}
+
+function requiredStringArray(value: unknown, field: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== "string")
+  ) {
     throw new Error(`Codex Security workbench returned invalid ${field}.`);
   }
   return value;

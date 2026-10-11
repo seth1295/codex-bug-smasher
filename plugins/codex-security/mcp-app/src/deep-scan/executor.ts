@@ -12,6 +12,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  posix,
   resolve,
   win32,
 } from "node:path";
@@ -46,6 +47,8 @@ export interface CodexSdkWorkerModelSettings {
 export interface CodexSdkWorkerArtifactContext {
   pluginRoot: string;
   repoRoot: string;
+  sourceReadRoots: readonly string[];
+  sourceReadRootsError?: string;
   scanId: string;
   scope?: string;
   pythonCommand?: string;
@@ -76,7 +79,10 @@ export class CodexSdkWorkerExecutor implements CodexWorkerExecutor {
           "Deep Scan cannot start a read-only worker without verified parent sandbox metadata.",
         );
       }
-      const workerProfile = workerPermissionProfile(parentSandbox);
+      const workerProfile = workerPermissionProfile(
+        parentSandbox,
+        this.modelSettings.artifactContext,
+      );
       const configOverrides =
         workerPermissionProfileConfigOverrides(workerProfile);
       const originalCwd = process.cwd();
@@ -319,13 +325,25 @@ function workerSubagentConfig(
 type TomlValue = string | number | boolean | TomlObject;
 type TomlObject = { [key: string]: TomlValue };
 
-function workerPermissionProfile(sandbox: DeepWorkerParentSandbox): TomlObject {
+function workerPermissionProfile(
+  sandbox: DeepWorkerParentSandbox,
+  scan?: CodexSdkWorkerArtifactContext,
+): TomlObject {
+  if (scan?.sourceReadRootsError) {
+    throw new DeepScanNonRetryableError(scan.sourceReadRootsError);
+  }
+  const readOnlyRoots = scan
+    ? [...scan.sourceReadRoots, scan.pluginRoot]
+        .map((root) => workerReadOnlyRoot(sandbox, root))
+        .map((root) => [root, { ".": "read" }])
+    : [];
   return {
     extends: ":read-only",
     // Object.fromEntries preserves literal keys such as "__proto__" without
     // letting a denied path mutate the serializer object prototype.
     filesystem: Object.fromEntries([
       [":root", "read"],
+      ...readOnlyRoots,
       ...Array.from(sandbox.filesystemDenies, (key) => [key, "deny"]),
       ...(sandbox.globScanMaxDepth === undefined
         ? []
@@ -333,6 +351,56 @@ function workerPermissionProfile(sandbox: DeepWorkerParentSandbox): TomlObject {
     ]),
     network: { enabled: false },
   };
+}
+
+function workerReadOnlyRoot(
+  sandbox: DeepWorkerParentSandbox,
+  root: string,
+): string {
+  if (!isAbsolute(root)) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely add a relative source or plugin directory to the worker read-only profile.",
+    );
+  }
+  const normalized = resolve(root);
+  const deniedByParent = sandbox.filesystemDenies.some(
+    (denial) =>
+      !hasGlobMetacharacters(denial) && pathContains(denial, normalized),
+  );
+  if (deniedByParent) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely read a source or plugin directory denied by the parent filesystem policy.",
+    );
+  }
+  const grantedByParent =
+    sandbox.filesystemUnrestricted ||
+    sandbox.filesystemReadRoots.some((readRoot) =>
+      pathContains(readRoot, normalized),
+    );
+  if (!grantedByParent) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely read a source or plugin directory outside the parent filesystem grants.",
+    );
+  }
+  return normalized;
+}
+
+function hasGlobMetacharacters(value: string): boolean {
+  return /[*?\[\]]/u.test(value);
+}
+
+function pathContains(parent: string, candidate: string): boolean {
+  const paths = win32.isAbsolute(parent) ? win32 : posix;
+  const relativePath = paths.relative(
+    paths.resolve(parent),
+    paths.resolve(candidate),
+  );
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${paths.sep}`) &&
+      !paths.isAbsolute(relativePath))
+  );
 }
 
 function workerPermissionProfileConfigOverrides(profile: TomlObject): string[] {
