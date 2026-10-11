@@ -134,18 +134,21 @@ def create_cli_scan(
             snapshot_digest = connection.execute(
                 "SELECT target_snapshot_digest FROM scans WHERE id = ?", (launched["scanId"],)
             ).fetchone()[0]
-    write_completed_contract(
-        scan_dir,
-        launched["scanId"],
-        repository,
-        identity_anchor=identity_anchor,
-        include_paths=paths,
-        coverage_mode=coverage_mode,
-        inventory_strategy="scoped_path" if paths else "repository",
-        target_kind="git_revision" if target_revision is not None else "directory_snapshot",
-        target_revision=target_revision,
-        snapshot_digest=snapshot_digest,
+    contract_options = {
+        "identity_anchor": identity_anchor,
+        "include_paths": paths,
+        "coverage_mode": coverage_mode,
+        "inventory_strategy": "scoped_path" if paths else "repository",
+        "target_kind": "git_revision" if target_revision is not None else "directory_snapshot",
+        "target_revision": target_revision,
+        "snapshot_digest": snapshot_digest,
+    }
+    write_contract = (
+        write_completed_functional_bug_contract
+        if mode == "deep"
+        else write_completed_contract
     )
+    write_contract(scan_dir, launched["scanId"], repository, **contract_options)
     if not finding or extra_anchors:
         findings_path = scan_dir / "findings.json"
         findings = json.loads(findings_path.read_text())
@@ -162,7 +165,10 @@ def create_cli_scan(
         coverage_path = scan_dir / "coverage.json"
         coverage = json.loads(coverage_path.read_text())
         coverage["completeness"] = completeness
-        coverage["surfaces"][0]["disposition"] = "needs_follow_up"
+        if mode == "deep":
+            coverage["reviewedAreas"][0]["disposition"] = "follow_up"
+        else:
+            coverage["surfaces"][0]["disposition"] = "needs_follow_up"
         coverage["deferred"] = [
             {"id": "unreviewed-path", "reason": "Review incomplete", "paths": ["src/extract.py"]}
         ]
@@ -173,6 +179,82 @@ def create_cli_scan(
         completion.extend(("--cost-json", json.dumps(cost)))
     run_workbench(state_dir, *completion)
     return launched
+
+
+def write_completed_functional_bug_contract(
+    scan_dir: Path,
+    scan_id: str,
+    repository: Path,
+    **contract_options: Any,
+) -> None:
+    write_completed_contract(scan_dir, scan_id, repository, **contract_options)
+    manifest_path = scan_dir / "scan-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["documentType"] = "functional-bug-scan.scan-manifest"
+    manifest["scan"]["reviewType"] = "functional_bug"
+    manifest["scan"]["producer"]["name"] = "functional-bug-scan-plugin"
+    manifest_path.write_text(json.dumps(manifest))
+    location_path = (
+        f"{contract_options['include_paths'][0]}/extract.py"
+        if contract_options["include_paths"]
+        else "src/extract.py"
+    )
+    (scan_dir / "findings.json").write_text(
+        json.dumps(
+            {
+                "scanId": scan_id,
+                "findings": [
+                    {
+                        "ruleId": "fixture.functional-division-order",
+                        "identity": {"anchor": "fixture-division-order"},
+                        "title": "Ratio truncates before multiplication",
+                        "summary": "Integer division runs before the amount is multiplied.",
+                        "priority": "P1",
+                        "category": "algorithm",
+                        "confidence": {
+                            "level": "high",
+                            "rationale": "A direct reproduction returns the wrong amount.",
+                        },
+                        "locations": [{"path": location_path, "startLine": 41}],
+                        "expected": "Prorating 500 cents at two fifths returns 200 cents.",
+                        "actual": "The implementation returns 0 cents.",
+                        "impact": "The calculation returns an incorrect amount.",
+                        "validation": {
+                            "status": "validated",
+                            "method": "A direct execution of the fixture function.",
+                            "evidence": ["prorate(500, 2, 5) returned 0 instead of 200."],
+                            "reproduction": ["Call prorate(500, 2, 5)."],
+                            "counterEvidence": ["A safe sibling implementation returns 200."],
+                        },
+                        "provenance": {
+                            "source": "local_plugin",
+                            "sourceFindingIds": ["worker-a:0"],
+                        },
+                    }
+                ],
+                "hypotheses": [],
+            }
+        )
+    )
+    (scan_dir / "coverage.json").write_text(
+        json.dumps(
+            {
+                "documentType": "functional-bug-scan.coverage",
+                "schemaVersion": "1.0",
+                "scanId": scan_id,
+                "mode": contract_options["coverage_mode"],
+                "completeness": "complete",
+                "inventoryStrategy": contract_options["inventory_strategy"],
+                "includePaths": contract_options["include_paths"] or ["."],
+                "excludePaths": [],
+                "reviewedAreas": [
+                    {"label": "Functional behavior", "disposition": "reviewed"}
+                ],
+                "explicitExclusions": [],
+                "deferred": [],
+            }
+        )
+    )
 
 
 def insert_scan(
@@ -1376,7 +1458,13 @@ def test_cli_scan_comparison_requires_complete_matching_path_coverage(tmp_path: 
         state_dir, root, repository, finding=False, completeness="partial", paths=["src"]
     )
     other_scope = create_cli_scan(state_dir, root, repository, finding=False, paths=["tests"])
+    deep = create_cli_scan(state_dir, root, repository, mode="deep")
     explicit_root = create_cli_scan(state_dir, root, repository, paths=["."])
+    deep_result = run_workbench(state_dir, "get-scan", "--scan-id", deep["scanId"])["scan"]
+    assert deep_result["progress"]["status"] == "complete"
+    assert deep_result["findingCount"] == 1
+    assert deep_result["priorityCounts"] == {"P1": 1}
+    assert "severityCounts" not in deep_result
     assert (
         run_workbench(state_dir, "get-scan", "--scan-id", explicit_root["scanId"])["scan"][
             "progress"
