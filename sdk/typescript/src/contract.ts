@@ -132,9 +132,7 @@ export async function loadContractWithScanDirectory(
   };
   const isFunctionalBugScan =
     manifestShape.scan?.reviewType === "functional_bug";
-  const documents = isFunctionalBugScan
-    ? FUNCTIONAL_BUG_DOCUMENTS
-    : DOCUMENTS;
+  const documents = isFunctionalBugScan ? FUNCTIONAL_BUG_DOCUMENTS : DOCUMENTS;
 
   const ajv = createValidator();
   for (const [filename, schemaName] of Object.entries(documents)) {
@@ -159,11 +157,7 @@ export async function loadContractWithScanDirectory(
         return result;
       };
       valid = validatePayload(payload);
-      if (
-        !valid &&
-        filename === "findings.json" &&
-        !isFunctionalBugScan
-      ) {
+      if (!valid && filename === "findings.json" && !isFunctionalBugScan) {
         payload = normalizePersistedFindings(payload);
         valid = validatePayload(payload);
       }
@@ -181,7 +175,9 @@ export async function loadContractWithScanDirectory(
       "scan-manifest.json"
     ] as unknown as BugScanManifest;
     const bugFindings = findingsPayload as BugFindingsDocument;
-    const bugCoverage = payloads["coverage.json"] as unknown as BugCoverageDocument;
+    const bugCoverage = payloads[
+      "coverage.json"
+    ] as unknown as BugCoverageDocument;
     if (
       options.expectedScanId !== undefined &&
       bugManifest.scan.id !== options.expectedScanId
@@ -199,7 +195,10 @@ export async function loadContractWithScanDirectory(
       );
     }
     if (
-      !sameArray(bugCoverage.includePaths, bugManifest.scan.scope.includePaths) ||
+      !sameArray(
+        bugCoverage.includePaths,
+        bugManifest.scan.scope.includePaths,
+      ) ||
       !sameArray(bugCoverage.excludePaths, bugManifest.scan.scope.excludePaths)
     ) {
       throw new ContractValidationError(
@@ -240,7 +239,8 @@ export async function loadContractWithScanDirectory(
           scanId: bugCoverage.scanId,
           mode: bugCoverage.mode as CoverageDocument["mode"],
           completeness: bugCoverage.completeness,
-          inventoryStrategy: bugCoverage.inventoryStrategy as CoverageDocument["inventoryStrategy"],
+          inventoryStrategy:
+            bugCoverage.inventoryStrategy as CoverageDocument["inventoryStrategy"],
           includePaths: bugCoverage.includePaths,
           excludePaths: bugCoverage.excludePaths,
           surfaces: [],
@@ -629,7 +629,9 @@ function validateCanonicalBugContract(
       throw new ContractValidationError(`${context}: duplicate bug id.`);
     }
     if (occurrenceIds.has(finding.occurrenceId)) {
-      throw new ContractValidationError(`${context}: duplicate bug occurrence.`);
+      throw new ContractValidationError(
+        `${context}: duplicate bug occurrence.`,
+      );
     }
     findingIds.add(finding.findingId);
     occurrenceIds.add(finding.occurrenceId);
@@ -712,7 +714,9 @@ function validateCanonicalBugContract(
   const expectedHypotheses = coverage.deferred.filter(
     (item) => "candidate" in item || "finding" in item || "hypothesis" in item,
   );
-  if (JSON.stringify(findings.hypotheses) !== JSON.stringify(expectedHypotheses)) {
+  if (
+    JSON.stringify(findings.hypotheses) !== JSON.stringify(expectedHypotheses)
+  ) {
     throw new ContractValidationError(
       "findings.hypotheses: must match unresolved candidates in coverage.deferred.",
     );

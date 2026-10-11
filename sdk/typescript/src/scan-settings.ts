@@ -68,7 +68,8 @@ export const DeepScanSettingsSchema = z.strictObject({
   }),
   subagents: nonnegativeInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.subagents,
-    description: "Investigator subagents available to each bug-scan worker. Zero is valid.",
+    description:
+      "Investigator subagents available to each bug-scan worker. Zero is valid.",
   }),
   stopAfterNoNew: positiveInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.stopAfterNoNew,

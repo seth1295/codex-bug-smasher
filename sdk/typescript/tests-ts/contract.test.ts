@@ -25,7 +25,10 @@ import { createApiTestFixtures } from "./support/temporary-directories.js";
 import { readJson as readJsonFile, writeJson } from "./support/json.js";
 
 const EXAMPLE = join(PLUGIN_ROOT, "examples", "completed-scan");
-const BUG_PLUGIN_ROOT = resolve(import.meta.dirname, "../../../plugins/codex-security");
+const BUG_PLUGIN_ROOT = resolve(
+  import.meta.dirname,
+  "../../../plugins/codex-security",
+);
 const { temporaryDirectory, cleanup } = createApiTestFixtures(
   "codex-security-contract-",
   false,
@@ -98,12 +101,14 @@ describe("canonical scan contract", () => {
       identity: { anchor: "invoice-proration-integer-order" },
       fingerprints: { algorithm: "functional-bug/v1", primary: fingerprint },
       title: "Proration truncates its ratio before applying the amount",
-      summary: "The function returns an incorrect amount for fractional ratios.",
+      summary:
+        "The function returns an incorrect amount for fractional ratios.",
       priority: "P1",
       category: "algorithm",
       confidence: {
         level: "high",
-        rationale: "A deterministic reproduction demonstrates the wrong result.",
+        rationale:
+          "A deterministic reproduction demonstrates the wrong result.",
       },
       locations: [{ path: "src/invoice.mjs", startLine: 3 }],
       expected: "500 cents at two fifths returns 200 cents.",
@@ -116,7 +121,8 @@ describe("canonical scan contract", () => {
         reproduction: ["Call prorateCents(500, 2, 5)."],
         counterEvidence: ["A safe sibling implementation returns 200."],
       },
-      suggestedCorrection: "Multiply before dividing using the documented rounding rule.",
+      suggestedCorrection:
+        "Multiply before dividing using the documented rounding rule.",
       tests: ["Add a regression test for a fractional ratio."],
       provenance: { source: "local_plugin", sourceFindingIds: ["worker-1:0"] },
     };

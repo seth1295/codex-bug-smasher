@@ -115,16 +115,16 @@ directory must be private to you (`chmod 700`).
 
 ### Read results
 
-| Result                            | Contents                                                         |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `findings.findings`               | Security findings from Standard scans.                           |
-| `bugFindings.findings`            | Confirmed bugs from Deep scans, with P0-P3 priority.              |
-| `reportPath`                      | Path to the Markdown report.                                     |
-| `coverage`                        | What the scan assessed and any coverage gaps.                    |
-| `repositoryFindings`              | This scan's findings plus earlier open findings, when available. |
-| `sarifPath`                       | SARIF export path, or `null`.                                    |
+| Result                            | Contents                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `findings.findings`               | Security findings from Standard scans.                                    |
+| `bugFindings.findings`            | Confirmed bugs from Deep scans, with P0-P3 priority.                      |
+| `reportPath`                      | Path to the Markdown report.                                              |
+| `coverage`                        | What the scan assessed and any coverage gaps.                             |
+| `repositoryFindings`              | This scan's findings plus earlier open findings, when available.          |
+| `sarifPath`                       | SARIF export path, or `null`.                                             |
 | `threatModel` / `threatModelPath` | Saved Standard scan threat model and document path; either can be `null`. |
-| `cost`                            | Estimated model usage cost, or `null` when unavailable.          |
+| `cost`                            | Estimated model usage cost, or `null` when unavailable.                   |
 
 Review coverage alongside findings. A report with no findings does not establish
 that the repository has no defects or security issues. Reports and logs can contain source code,
@@ -161,18 +161,18 @@ const result = await security.run("/path/to/repository", {
 });
 ```
 
-| Option                                      | Use                                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `target`                                    | Whole repository (default), repository-relative paths, or a `DiffTarget`.      |
+| Option                                      | Use                                                                                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `target`                                    | Whole repository (default), repository-relative paths, or a `DiffTarget`.                                               |
 | `mode`                                      | `"standard"` (default) or `"deep"`. Deep mode runs a resumable functional bug scan over repositories or selected paths. |
-| `knowledgeBasePaths`                        | Supporting text, PDF, DOCX files, or directories.                              |
-| `scanPrompt` / `scanPromptFile`             | Additional scan instructions. Inline text takes precedence.                    |
-| `validationPrompt` / `validationPromptFile` | Custom validation instructions for standard scans.                             |
-| `postScanPrompt` / `postScanPromptFile`     | Follow-up instructions after the scan.                                         |
-| `outputDir`                                 | Results directory; omit to use the state directory.                            |
-| `archiveExisting`                           | Move previous results aside before reusing `outputDir`.                        |
-| `maxCostUsd`                                | Stop at an estimated model cost; see [cost limits](#progress-and-cost).        |
-| `signal`                                    | An `AbortSignal` to cancel the scan.                                           |
+| `knowledgeBasePaths`                        | Supporting text, PDF, DOCX files, or directories.                                                                       |
+| `scanPrompt` / `scanPromptFile`             | Additional scan instructions. Inline text takes precedence.                                                             |
+| `validationPrompt` / `validationPromptFile` | Custom validation instructions for standard scans.                                                                      |
+| `postScanPrompt` / `postScanPromptFile`     | Follow-up instructions after the scan.                                                                                  |
+| `outputDir`                                 | Results directory; omit to use the state directory.                                                                     |
+| `archiveExisting`                           | Move previous results aside before reusing `outputDir`.                                                                 |
+| `maxCostUsd`                                | Stop at an estimated model cost; see [cost limits](#progress-and-cost).                                                 |
+| `signal`                                    | An `AbortSignal` to cancel the scan.                                                                                    |
 
 The exported `ScanOptions` type describes all options and callbacks. For full
 CLI behavior, see [scan options and output](docs/cli.md#scan-options-and-output).
@@ -218,7 +218,10 @@ for supported overrides and defaults.
 Load shared CLI and SDK settings explicitly:
 
 ```ts
-import { CodexSecurity, loadProjectConfig } from "./sdk/typescript/dist/index.js";
+import {
+  CodexSecurity,
+  loadProjectConfig,
+} from "./sdk/typescript/dist/index.js";
 
 const { config, options } = await loadProjectConfig("codex-security.yaml");
 const security = new CodexSecurity(config);
