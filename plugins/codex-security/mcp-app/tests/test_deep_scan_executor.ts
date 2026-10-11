@@ -37,7 +37,6 @@ const {
   appendSafeItemDiagnostic,
   classifyCodexWorkerError,
   DeepScanNonRetryableError,
-  isCodexCybersecurityPolicyRefusal,
 } = await importModule({
   define: {
     "import.meta.url": JSON.stringify(executorSource.href),
@@ -57,6 +56,8 @@ const temporaryDirectories = createTemporaryDirectories();
 const previousMarker = process.env.FAKE_CODEX_MARKER;
 const trustedParentSandbox = Object.freeze({
   filesystemDenies: [],
+  filesystemReadRoots: [],
+  filesystemUnrestricted: true,
 });
 const trustedParentSandboxWithDenials = Object.freeze({
   filesystemDenies: [
@@ -65,6 +66,8 @@ const trustedParentSandboxWithDenials = Object.freeze({
     "/repo/**/*.pem",
     "/repo/.env",
   ],
+  filesystemReadRoots: [],
+  filesystemUnrestricted: true,
   globScanMaxDepth: 3,
 });
 const emptyWorkerPermissionProfile = {
@@ -111,9 +114,7 @@ try {
     await testAbortPropagation();
     await testUnstructuredConfigurationFailureRemainsRetryable();
     await testUnstructuredThreadStartFailureRemainsRetryable();
-    await testPolicyFailuresRemainWorkerErrors();
     await testMalformedCommandEventsRemainRetryable();
-    await testRateLimitPolicyFailureRemainsRetryable();
     await testArtifactStartupTimeoutClassification();
   }
   assert.equal(
@@ -219,40 +220,6 @@ function testWorkerErrorClassificationPreservesExplicitFailures() {
   );
   assert.equal(classifyCodexWorkerError(explicit), explicit);
 
-  const refusalMessages = [
-    "Request blocked by cyberPolicy.",
-    "Request blocked by a safety policy violation.",
-    "This content was flagged for possible cybersecurity risk.",
-    "This content was flagged for potentially high-risk cyber activity.",
-    "This request has been flagged for possible cybersecurity risk.",
-    "This request has been flagged for potentially high-risk cyber activity.",
-  ];
-  for (const message of refusalMessages) {
-    const original = new Error(message);
-    const classified = classifyCodexWorkerError(original);
-    assert.equal(classified, original);
-    assert.equal(classified.name, "Error");
-    assert.equal(isCodexCybersecurityPolicyRefusal(classified), true);
-
-    const explicitRefusal = new DeepScanNonRetryableError(message);
-    assert.equal(classifyCodexWorkerError(explicitRefusal), explicitRefusal);
-
-    for (const unrecognized of [
-      `Source fixture: ${message}`,
-      `${message} Source fixture.`,
-      JSON.stringify({ message }),
-      `Codex Exec exited with code 1: ${message}`,
-      `429 Too Many Requests: ${message}`,
-      ` ${message}`,
-      `${message}\n`,
-      message.toLowerCase(),
-    ]) {
-      const unrelated = new Error(unrecognized);
-      assert.equal(classifyCodexWorkerError(unrelated), unrelated);
-      assert.equal(isCodexCybersecurityPolicyRefusal(unrelated), false);
-    }
-  }
-
   for (const message of [
     "config parser handles unknown keys",
     "failed to load configuration: invalid value",
@@ -267,7 +234,7 @@ function testWorkerErrorClassificationPreservesExplicitFailures() {
     const original = new Error(message);
     assert.equal(classifyCodexWorkerError(original), original);
   }
-  for (const code of ["ECONNRESET", "EPIPE", "ETIMEDOUT", "cyber_policy"]) {
+  for (const code of ["ECONNRESET", "EPIPE", "ETIMEDOUT", "provider_error"]) {
     const original = Object.assign(new Error("Unrecognized worker failure"), {
       code,
     });
@@ -904,7 +871,7 @@ async function testSdkInvocationAndThreadCapture() {
       kind: "discovery",
       promptPath,
       workingDirectory,
-      subagents: 3,
+      subagents: 1,
       signal: new AbortController().signal,
       onThreadStarted: onThreadId,
     });
@@ -932,7 +899,7 @@ async function testSdkInvocationAndThreadCapture() {
       workerPermissionProfileOverride(invocation.argv),
       'permissions.codex_security_deep_scan_worker={extends=":read-only",filesystem={":root"="read","/repo/.env"="deny","/repo/**/.secret"="deny","/repo/**/*.pem"="deny",glob_scan_max_depth=3},network={enabled=false}}',
     );
-    assertWorkerSubagentPolicy(invocation.argv, 3);
+    assertWorkerSubagentPolicy(invocation.argv, 1);
     assertFlagPair(invocation.argv, "--cd", workingDirectory);
     assert.equal(invocation.argv.includes("--skip-git-repo-check"), true);
   }, deniedWorkerPermissionProfile);
@@ -1141,9 +1108,41 @@ async function testWorkerRuntimeSettings() {
     delete process.env.CODEX_API_KEY;
     for (const [configuration, expected] of cases) {
       const fixture = await fakeCodexFixture(
-        deniedWorkerPermissionProfile,
+        (root) => ({
+          extends: ":read-only",
+          filesystem: {
+            ":root": "read",
+            [path.join(root, "target", "src", "invoice[one].py")]: {
+              ".": "read",
+            },
+            [`${path.join(root, "target")}/**`]: "read",
+            [`${path.join(root, "plugin")}/**`]: "read",
+            "/repo/.env": "deny",
+            "/repo/**/.secret": "deny",
+            "/repo/**/*.pem": "deny",
+            glob_scan_max_depth: 3,
+          },
+          network: { enabled: false },
+        }),
         true,
         { account: null, requiresOpenaiAuth: false },
+      );
+      const repoRoot = path.join(fixture.root, "target");
+      const sourceReadRoot = path.join(repoRoot, "src", "invoice[one].py");
+      const pluginRoot = path.join(fixture.root, "plugin");
+      const workerOutputDirectory = path.join(fixture.root, "worker-output");
+      const reducerOutputDirectory = path.join(fixture.root, "reducer-output");
+      await Promise.all([
+        mkdir(repoRoot),
+        mkdir(path.join(pluginRoot, "references"), { recursive: true }),
+        mkdir(workerOutputDirectory),
+        mkdir(reducerOutputDirectory),
+      ]);
+      await mkdir(path.dirname(sourceReadRoot), { recursive: true });
+      await writeFile(sourceReadRoot, "def prorate(): return 0\n");
+      await writeFile(
+        path.join(pluginRoot, "references", "core-bug-scan.md"),
+        "Synthetic scan instructions.\n",
       );
       const python = path.join(fixture.root, "selected venv", "bin", "python");
       const helperPython = path.join(
@@ -1231,10 +1230,15 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
         (modelSettings) =>
           new CodexSdkWorkerExecutor({
             ...modelSettings,
-            parentSandbox: trustedParentSandboxWithDenials,
+            parentSandbox: {
+              ...trustedParentSandboxWithDenials,
+              filesystemReadRoots: [sourceReadRoot, repoRoot, pluginRoot],
+              filesystemUnrestricted: false,
+            },
             artifactContext: {
-              pluginRoot: fixture.root,
-              repoRoot: fixture.root,
+              pluginRoot,
+              repoRoot,
+              sourceReadRoots: [sourceReadRoot, repoRoot],
               scanId: `fixture-scan-${modelSettings.model ?? "inherited"}`,
               pythonCommand: helperPython,
             },
@@ -1255,11 +1259,14 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               return executor.run({
                 kind,
                 promptPath,
-                workingDirectory: fixture.root,
-                subagents: 0,
+                workingDirectory: workerOutputDirectory,
+                subagents: kind === "dedup" ? 0 : 1,
                 resumeThreadId,
                 artifactContext: {
-                  root: fixture.root,
+                  root:
+                    kind === "dedup"
+                      ? reducerOutputDirectory
+                      : workerOutputDirectory,
                   layout: kind === "dedup" ? "reducer" : "worker",
                   ...(kind === "dedup"
                     ? {
@@ -1277,7 +1284,11 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
           const workerLaunches = launches.filter(
             ({ args }) => args[0] === "exec",
           );
+          const sourceProbeLaunches = launches.filter(
+            ({ args }) => args[args.indexOf("sandbox")] === "sandbox",
+          );
           assert.equal(workerLaunches.length, settings.length);
+          assert.equal(sourceProbeLaunches.length, settings.length);
           for (const [
             index,
             { model, reasoningEffort },
@@ -1310,9 +1321,46 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               workerLaunch.environment!.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
               process.env.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
             );
+            const workerProfile = workerPermissionProfileOverride(
+              workerLaunch.args,
+            );
             assert.equal(
-              workerPermissionProfileOverride(workerLaunch.args),
-              'permissions.codex_security_deep_scan_worker={extends=":read-only",filesystem={":root"="read","/repo/.env"="deny","/repo/**/.secret"="deny","/repo/**/*.pem"="deny",glob_scan_max_depth=3},network={enabled=false}}',
+              workerProfile.includes(
+                `${JSON.stringify(sourceReadRoot)}={"."="read"}`,
+              ),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes(
+                `${JSON.stringify(`${repoRoot}/**`)}="read"`,
+              ),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes(
+                `${JSON.stringify(repoRoot)}={"."="read"}`,
+              ),
+              false,
+            );
+            assert.equal(
+              workerProfile.includes(
+                `${JSON.stringify(`${pluginRoot}/**`)}="read"`,
+              ),
+              true,
+            );
+            assert.ok(
+              workerProfile.indexOf(
+                `${JSON.stringify(sourceReadRoot)}={"."="read"}`,
+              ) < workerProfile.indexOf('"/repo/.env"="deny"'),
+            );
+            assert.equal(workerProfile.includes('"/repo/.env"="deny"'), true);
+            assert.equal(
+              workerProfile.includes('"/repo/**/.secret"="deny"'),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes('"/repo/**/*.pem"="deny"'),
+              true,
             );
             const invocation = await readJson(workerLaunch.markerPath);
             assert.equal(invocation.providerKey, providerKeys[index]);
@@ -1356,8 +1404,12 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               invocation.deepConfigPath,
               process.env.CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH,
             );
+            assertFlagPair(invocation.argv, "--cd", workerOutputDirectory);
             assertReadOnlyWorkerPolicy(invocation.argv);
-            assertWorkerSubagentPolicy(invocation.argv, 0);
+            assertWorkerSubagentPolicy(
+              invocation.argv,
+              kind === "dedup" ? 0 : 1,
+            );
           }
           for (const launch of launches.filter(({ args }) =>
             args.includes("app-server"),
@@ -1369,6 +1421,153 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               workerPermissionProfileOverride(workerLaunches[0].args),
             );
           }
+          for (const launch of sourceProbeLaunches) {
+            const probe = await readJson(launch.markerPath);
+            assert.equal(probe.cwd, workerOutputDirectory);
+            assert.equal(
+              launch.environment?.CODEX_HOME,
+              await realpath(codexHome),
+            );
+            assert.equal(launch.environment?.CODEX_CLI_PATH, process.execPath);
+            assert.equal(launch.environment?.PATH, gitEnvironment.PATH);
+            assert.equal(
+              launch.environment?.CODEX_SECURITY_GIT,
+              gitEnvironment.CODEX_SECURITY_GIT,
+            );
+            assert.equal(
+              launch.environment?.GIT_SSH_COMMAND,
+              gitEnvironment.GIT_SSH_COMMAND,
+            );
+            assert.equal(
+              launch.environment?.GIT_CONFIG_GLOBAL,
+              gitEnvironment.GIT_CONFIG_GLOBAL,
+            );
+            assert.ok(
+              providerKeys.includes(launch.environment?.SYNTHETIC_GATEWAY_KEY),
+            );
+            assert.ok(probe.argv.includes("--cd"));
+            assert.ok(probe.argv.includes(workerOutputDirectory));
+            assert.ok(probe.argv.includes("--include-managed-config"));
+            assert.deepEqual(
+              probe.argv.slice(
+                probe.argv.indexOf("--permission-profile"),
+                probe.argv.indexOf("--permission-profile") + 2,
+              ),
+              ["--permission-profile", "codex_security_deep_scan_worker"],
+            );
+            if (process.platform === "win32") {
+              assert.match(
+                probe.argv[probe.argv.indexOf("--") + 1],
+                /powershell\.exe$/iu,
+              );
+              assert.ok(probe.argv.includes("-NonInteractive"));
+              assert.ok(launch.environment?.CODEX_SECURITY_SOURCE_PROBE_ROOTS);
+              assert.equal(
+                launch.environment?.CODEX_SECURITY_SOURCE_PROBE_REFERENCE,
+                path.join(pluginRoot, "references", "core-bug-scan.md"),
+              );
+            } else {
+              assert.ok(probe.argv.includes(process.execPath));
+            }
+            assert.equal(
+              workerPermissionProfileOverride(launch.args),
+              workerPermissionProfileOverride(workerLaunches[0].args),
+            );
+          }
+          const launchCountBeforeDeniedRoot = launches.length;
+          await assert.rejects(
+            new CodexSdkWorkerExecutor({
+              model: "fixture-denied-target-model",
+              parentSandbox: {
+                filesystemDenies: [repoRoot],
+                filesystemReadRoots: [sourceReadRoot, pluginRoot],
+                filesystemUnrestricted: false,
+              },
+              artifactContext: {
+                pluginRoot,
+                repoRoot,
+                sourceReadRoots: [sourceReadRoot],
+                scanId: "fixture-denied-target",
+              },
+            }).run({
+              kind: "discovery",
+              promptPath,
+              workingDirectory: workerOutputDirectory,
+              subagents: 1,
+              artifactContext: {
+                root: workerOutputDirectory,
+                layout: "worker",
+              },
+              signal: new AbortController().signal,
+            }),
+            (error: Error) =>
+              error instanceof DeepScanNonRetryableError &&
+              error.message.includes("denied by the parent filesystem policy"),
+          );
+          assert.equal(launches.length, launchCountBeforeDeniedRoot);
+          launches.length = 0;
+          process.env.FAKE_CODEX_PROBE_DENIED = "1";
+          try {
+            await assert.rejects(
+              executors[0].run({
+                kind: "discovery",
+                promptPath,
+                workingDirectory: workerOutputDirectory,
+                subagents: 1,
+                artifactContext: {
+                  root: workerOutputDirectory,
+                  layout: "worker",
+                },
+                signal: new AbortController().signal,
+              }),
+              (error: Error) =>
+                error instanceof DeepScanNonRetryableError &&
+                error.message.includes("before starting a model worker") &&
+                error.message.includes("fixture policy denied source read"),
+            );
+          } finally {
+            delete process.env.FAKE_CODEX_PROBE_DENIED;
+          }
+          assert.deepEqual(
+            launches.map(({ args }) =>
+              args.includes("sandbox")
+                ? "sandbox"
+                : args.includes("app-server")
+                  ? "app-server"
+                  : args[0],
+            ),
+            ["app-server", "sandbox"],
+          );
+          await assert.rejects(
+            new CodexSdkWorkerExecutor({
+              model: "fixture-ungranted-target-model",
+              parentSandbox: {
+                filesystemDenies: [],
+                filesystemReadRoots: [],
+                filesystemUnrestricted: false,
+              },
+              artifactContext: {
+                pluginRoot,
+                repoRoot,
+                sourceReadRoots: [sourceReadRoot],
+                scanId: "fixture-ungranted-target",
+              },
+            }).run({
+              kind: "discovery",
+              promptPath,
+              workingDirectory: workerOutputDirectory,
+              subagents: 1,
+              artifactContext: {
+                root: workerOutputDirectory,
+                layout: "worker",
+              },
+              signal: new AbortController().signal,
+            }),
+            (error: Error) =>
+              error instanceof DeepScanNonRetryableError &&
+              error.message.includes("outside the parent filesystem grants"),
+          );
+          assert.equal(launches.length, launchCountBeforeDeniedRoot);
           await writeFile(configPath, 'model_reasoning_summary = "detailed"\n');
         }
       }
@@ -1647,13 +1846,32 @@ async function testZeroSubagentsPreservesHostRestrictions() {
 }
 
 async function testArtifactServerUsesExtendedStartupTimeout() {
-  return withWorkerFixture(async (fixture, promptPath, workingDirectory) => {
-    await writeFile(promptPath, "fixture artifact worker prompt\n");
+  const fixture = await fakeCodexFixture((root) => ({
+    extends: ":read-only",
+    filesystem: {
+      ":root": "read",
+      [`${root}/**`]: "read",
+    },
+    network: { enabled: false },
+  }));
+  const previousCodexPath = process.env.CODEX_CLI_PATH;
+  const promptPath = path.join(fixture.root, "prompt.md");
+  const workingDirectory = path.join(fixture.root, "worker-output");
+  await mkdir(path.join(fixture.root, "references"), { recursive: true });
+  await mkdir(workingDirectory);
+  await writeFile(promptPath, "fixture artifact worker prompt\n");
+  await writeFile(
+    path.join(fixture.root, "references", "core-bug-scan.md"),
+    "Synthetic scan instructions.\n",
+  );
+  process.env.CODEX_CLI_PATH = fixture.executablePath;
+  try {
     const result = await new CodexSdkWorkerExecutor({
       parentSandbox: trustedParentSandbox,
       artifactContext: {
         pluginRoot: fixture.root,
         repoRoot: fixture.root,
+        sourceReadRoots: [fixture.root],
         scanId: "fixture-scan-id",
       },
     }).run({
@@ -1671,7 +1889,9 @@ async function testArtifactServerUsesExtendedStartupTimeout() {
       "mcp_servers.cs_artifacts.required": true,
       "mcp_servers.cs_artifacts.tool_timeout_sec": 86400,
     });
-  });
+  } finally {
+    restoreEnv("CODEX_CLI_PATH", previousCodexPath);
+  }
 }
 
 async function testSdkResumesExistingThread() {
@@ -1685,7 +1905,7 @@ async function testSdkResumesExistingThread() {
       kind: "discovery",
       promptPath,
       workingDirectory,
-      subagents: 3,
+      subagents: 1,
       signal: new AbortController().signal,
       resumeThreadId: "fixture-existing-thread",
       continuationPrompt: "continue the existing worker\n",
@@ -1698,7 +1918,7 @@ async function testSdkResumesExistingThread() {
     assertFlagPair(invocation.argv, "--model", "gpt-5.6-sol");
     assertConfigOverrides(invocation.argv, { model_reasoning_effort: "ultra" });
     assertReadOnlyWorkerPolicy(invocation.argv);
-    assertWorkerSubagentPolicy(invocation.argv, 3);
+    assertWorkerSubagentPolicy(invocation.argv, 1);
     assert.equal(invocation.stdin, "continue the existing worker\n");
   });
 }
@@ -1718,6 +1938,7 @@ async function testRetryNotificationDoesNotInterruptTurn() {
     assert.equal(result.threadId, "fixture-thread-id");
     const invocation = await readJson(fixture.markerPath);
     assert.equal(invocation.argv.includes("--model"), false);
+    assertWorkerSubagentPolicy(invocation.argv, 3);
     assertConfigOverrides(invocation.argv, {
       model_reasoning_effort: undefined,
     });
@@ -1997,39 +2218,11 @@ async function testUnstructuredThreadStartFailureRemainsRetryable() {
   );
 }
 
-async function testPolicyFailuresRemainWorkerErrors() {
-  for (const prompt of [
-    "CYBER_POLICY_ERROR",
-    "SAFETY_POLICY_ERROR",
-    "CYBERSECURITY_RISK_ERROR",
-    "HIGH_RISK_CYBER_ACTIVITY_ERROR",
-    "UPSTREAM_CYBERSECURITY_RISK_ERROR",
-    "UPSTREAM_HIGH_RISK_CYBER_ACTIVITY_ERROR",
-  ]) {
-    await assert.rejects(
-      runFixtureWorker(prompt),
-      (error: NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }) =>
-        error?.name === "Error" && isCodexCybersecurityPolicyRefusal(error),
-    );
-  }
-}
-
-async function testRateLimitPolicyFailureRemainsRetryable() {
-  await assert.rejects(
-    runFixtureWorker("RATE_LIMIT_CYBER_POLICY_ERROR"),
-    (error: NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }) =>
-      error?.name === "Error" &&
-      /429 Too Many Requests/.test(error?.message ?? ""),
-  );
-}
-
 async function testMalformedCommandEventsRemainRetryable() {
   for (const output of [
     "ordinary source text",
     "config parser handles unknown keys",
     "authentication required",
-    "Request blocked by cyberPolicy.",
-    "This request has been flagged for possible cybersecurity risk.",
   ]) {
     await withWorkerFixture(async (fixture, promptPath, workingDirectory) => {
       await writeFile(
@@ -2201,7 +2394,11 @@ async function runFixtureWorker(
 }
 
 async function fakeCodexFixture(
-  preflightProfile = emptyWorkerPermissionProfile,
+  preflightProfile:
+    | Readonly<Record<string, unknown>>
+    | ((
+        root: string,
+      ) => Readonly<Record<string, unknown>>) = emptyWorkerPermissionProfile,
   preflightAllowed = true,
   accountResult: {
     account: { type: string } | null;
@@ -2211,6 +2408,10 @@ async function fakeCodexFixture(
   const root = await temporaryDirectories.create(
     "codex-security-sdk-executor-",
   );
+  const expectedPreflightProfile =
+    typeof preflightProfile === "function"
+      ? preflightProfile(root)
+      : preflightProfile;
   const markerPath = path.join(root, "invocation.json");
   const preflightMarkerPath = path.join(root, "preflight.json");
   const scriptPath = path.join(root, "fake-codex.mjs");
@@ -2219,11 +2420,22 @@ async function fakeCodexFixture(
     `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-const preflightProfile = ${JSON.stringify(preflightProfile)};
+const preflightProfile = ${JSON.stringify(expectedPreflightProfile)};
 const preflightAllowed = ${JSON.stringify(preflightAllowed)};
 const accountResult = ${JSON.stringify(accountResult)};
 const preflightMarkerPath = process.env.FAKE_CODEX_PREFLIGHT_MARKER ?? ${JSON.stringify(preflightMarkerPath)};
-if (process.argv.includes('app-server')) {
+if (process.argv.includes('sandbox')) {
+  writeFileSync(process.env.FAKE_CODEX_MARKER, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), codexHome: process.env.CODEX_HOME }));
+  if (process.env.FAKE_CODEX_PROBE_DENIED === '1') {
+    console.error('fixture policy denied source read');
+    process.exit(31);
+  }
+  const separator = process.argv.indexOf('--');
+  const probe = spawnSync(process.argv[separator + 1], process.argv.slice(separator + 2), { cwd: process.cwd(), encoding: 'utf8' });
+  if (probe.stdout) process.stdout.write(probe.stdout);
+  if (probe.stderr) process.stderr.write(probe.stderr);
+  process.exit(probe.status ?? 1);
+} else if (process.argv.includes('app-server')) {
   const preflight = { cwd: process.cwd(), codexHome: process.env.CODEX_HOME, runnerTrackingId: process.env.RUNNER_TRACKING_ID, libraryPath: process.env.LD_LIBRARY_PATH, gitEnvironment: Object.fromEntries(['PATH', 'CODEX_SECURITY_GIT', 'GIT_SSH_COMMAND', 'GIT_CONFIG_GLOBAL'].map(name => [name, process.env[name]])), requests: [] };
   writeFileSync(preflightMarkerPath, JSON.stringify(preflight));
   let buffer = '';
@@ -2284,7 +2496,6 @@ if (stdin.includes('MCP_STARTUP_TIMEOUT') || stdin.includes('CATALOG_AUTH_ONLY')
     console.error('required MCP servers failed to initialize: ' + serverName + ': ' + timeout);
   }
   if (stdin.includes('WITH_MISSING_API_KEY')) console.error('missing API key');
-  if (stdin.includes('WITH_POLICY_REFUSAL')) console.error('Request blocked by cyberPolicy.');
   process.exit(1);
 }
 const resumeIndex = process.argv.indexOf('resume');
@@ -2301,13 +2512,6 @@ const permissionProfileFallbackWarning = 'Configured value for \`permission_prof
 if (stdin.includes('PERMISSION_PROFILE_FALLBACK_ITEM')) console.log(JSON.stringify({ type: 'item.completed', item: { id: 'warning-1', type: 'error', message: permissionProfileFallbackWarning } }));
 if (stdin.includes('PERMISSION_PROFILE_FALLBACK_EVENT')) console.log(JSON.stringify({ type: 'error', message: permissionProfileFallbackWarning }));
 if (stdin.includes('BLOCK_AFTER_START')) await new Promise(() => {});
-if (stdin.includes('RATE_LIMIT_CYBER_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: '429 Too Many Requests: Request blocked by cyberPolicy.' } })); process.exit(0); }
-if (stdin.includes('CYBER_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'Request blocked by cyberPolicy.' } })); process.exit(0); }
-if (stdin.includes('SAFETY_POLICY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'Request blocked by a safety policy violation.' } })); process.exit(0); }
-if (stdin.includes('UPSTREAM_CYBERSECURITY_RISK_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This request has been flagged for possible cybersecurity risk.' } })); process.exit(0); }
-if (stdin.includes('UPSTREAM_HIGH_RISK_CYBER_ACTIVITY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This request has been flagged for potentially high-risk cyber activity.' } })); process.exit(0); }
-if (stdin.includes('CYBERSECURITY_RISK_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This content was flagged for possible cybersecurity risk.' } })); process.exit(0); }
-if (stdin.includes('HIGH_RISK_CYBER_ACTIVITY_ERROR')) { console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'This content was flagged for potentially high-risk cyber activity.' } })); process.exit(0); }
 if (stdin.includes('RETRYABLE_STREAM_ERROR')) console.log(JSON.stringify({ type: 'error', message: 'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)' }));
 if (stdin.includes('INCOMPLETE_STREAM')) { console.log(JSON.stringify({ type: 'error', message: 'fixture stream interrupted' })); process.exit(0); }
 if (stdin.includes('BWRAP_NAMESPACE_FAILURE')) console.log(JSON.stringify({ type: 'item.completed', item: { id: 'command-1', type: 'command_execution', command: 'super-secret-command', aggregated_output: 'private source text\\nbwrap: Creating new namespace failed: nesting depth or /proc/sys/user/max_user_namespaces exceeded (ENOSPC)', exit_code: 1, status: 'failed' } }));

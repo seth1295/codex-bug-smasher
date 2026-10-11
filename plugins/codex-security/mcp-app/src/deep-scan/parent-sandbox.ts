@@ -8,11 +8,14 @@ export const CODEX_SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta";
 
 export type DeepWorkerParentSandbox = {
   /**
-   * Validated path and glob keys copied into the worker's stricter root-read
-   * profile. Grants are intentionally not transported because Deep Scan
-   * workers never inherit parent write access.
+   * Validated path and glob denials copied into the worker's stricter
+   * read-only profile.
    */
   readonly filesystemDenies: readonly string[];
+  /** Explicit read roots the parent already grants; write grants are omitted. */
+  readonly filesystemReadRoots: readonly string[];
+  /** Parent access is unrestricted; workers still receive only scan roots. */
+  readonly filesystemUnrestricted: boolean;
   readonly globScanMaxDepth?: number;
 };
 
@@ -21,7 +24,7 @@ export function resolveDeepWorkerParentSandbox(
   extra: unknown,
 ): DeepWorkerParentSandbox {
   const state = trustedSandboxState(extra);
-  validateSandboxCwd(state.sandboxCwd);
+  const sandboxCwd = sandboxCwdPath(state.sandboxCwd);
 
   const profile = record(state.permissionProfile);
   if (!profile || profile.type !== "managed") {
@@ -44,7 +47,11 @@ export function resolveDeepWorkerParentSandbox(
   }
 
   if (filesystem.type === "unrestricted") {
-    return { filesystemDenies: [] };
+    return {
+      filesystemDenies: [],
+      filesystemReadRoots: [],
+      filesystemUnrestricted: true,
+    };
   }
 
   if (filesystem.type !== "restricted" || !Array.isArray(filesystem.entries)) {
@@ -57,6 +64,7 @@ export function resolveDeepWorkerParentSandbox(
 
   let hasRootRead = false;
   const filesystemDenies: string[] = [];
+  const filesystemReadRoots: string[] = [];
   for (const value of filesystem.entries) {
     const entry = record(value);
     if (!entry || !isKnownFilesystemAccess(entry.access)) {
@@ -89,7 +97,10 @@ export function resolveDeepWorkerParentSandbox(
           "parent filesystem denials on special paths cannot be preserved",
         );
       }
-      if (special.kind === "root") hasRootRead = true;
+      if (special.kind === "root") {
+        hasRootRead = true;
+        if (sandboxCwd !== undefined) filesystemReadRoots.push(sandboxCwd);
+      }
     } else if (path.type === "path" || path.type === "generated_default_path") {
       if (!isNonEmptyString(path.path)) {
         throw unsupportedParentSandbox(
@@ -108,6 +119,13 @@ export function resolveDeepWorkerParentSandbox(
           );
         }
         filesystemDenies.push(path.path);
+      } else if (entry.access === "read") {
+        if (!isAbsolute(path.path)) {
+          throw unsupportedParentSandbox(
+            "a parent filesystem read path is not absolute",
+          );
+        }
+        filesystemReadRoots.push(path.path);
       }
     } else if (path.type === "glob_pattern") {
       if (!isNonEmptyString(path.pattern)) {
@@ -146,6 +164,8 @@ export function resolveDeepWorkerParentSandbox(
 
   return {
     filesystemDenies,
+    filesystemReadRoots,
+    filesystemUnrestricted: false,
     ...(globScanMaxDepth !== undefined ? { globScanMaxDepth } : {}),
   };
 }
@@ -177,8 +197,8 @@ function trustedSandboxState(extra: unknown): Record<string, unknown> {
   return state;
 }
 
-function validateSandboxCwd(value: unknown): void {
-  if (value === undefined) return;
+function sandboxCwdPath(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim().length === 0) {
     throw unsupportedParentSandbox(
       "the parent sandbox working directory is invalid",
@@ -186,7 +206,14 @@ function validateSandboxCwd(value: unknown): void {
   }
   if (value.startsWith("file:")) {
     try {
-      if (isAbsolute(fileURLToPath(value))) return;
+      const url = new URL(value);
+      if (
+        url.protocol === "file:" &&
+        (url.hostname === "" || url.hostname.toLowerCase() === "localhost") &&
+        isAbsolute(fileURLToPath(url))
+      ) {
+        return fileURLToPath(url);
+      }
     } catch {
       throw unsupportedParentSandbox(
         "the parent sandbox working directory is invalid",
@@ -198,6 +225,7 @@ function validateSandboxCwd(value: unknown): void {
       "the parent sandbox working directory is invalid",
     );
   }
+  return value;
 }
 
 function resolveGlobScanMaxDepth(

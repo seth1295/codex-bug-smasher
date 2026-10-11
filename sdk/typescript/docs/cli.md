@@ -1,14 +1,15 @@
 # CLI and workflows
 
-Use `npx @openai/codex-security` without a global install. The examples below
-use `codex-security`, which is available after
-`npm install --global @openai/codex-security`.
+This fork is distributed as source today, not as an npm package under the
+`@openai/codex-security` name. Build it using the repository root README, then
+run these examples from the repository root. The local CLI entry point is
+`node sdk/typescript/bin/codex-security.mjs`.
 
 ```bash
-codex-security --help
-codex-security scan --help
-codex-security --version
-codex-security info --json
+node sdk/typescript/bin/codex-security.mjs --help
+node sdk/typescript/bin/codex-security.mjs scan --help
+node sdk/typescript/bin/codex-security.mjs --version
+node sdk/typescript/bin/codex-security.mjs info --json
 ```
 
 `--help` lists commands by task; `<command> --help` lists its options.
@@ -20,11 +21,11 @@ codex-security info --json
 Sign in with ChatGPT, or supply an API key for CI:
 
 ```bash
-codex-security login
-codex-security scan .
+node sdk/typescript/bin/codex-security.mjs login
+node sdk/typescript/bin/codex-security.mjs scan .
 
 # Save an API key from the environment.
-printenv OPENAI_API_KEY | codex-security login --with-api-key
+printenv OPENAI_API_KEY | node sdk/typescript/bin/codex-security.mjs login --with-api-key
 ```
 
 `OPENAI_API_KEY` and `CODEX_API_KEY` also work without saving a login.
@@ -39,7 +40,7 @@ On Windows, set a key in PowerShell:
 
 ```powershell
 $env:OPENAI_API_KEY = "<your-api-key>"
-codex-security scan C:\code\repository
+node sdk/typescript/bin/codex-security.mjs scan C:\code\repository
 ```
 
 ### Remote login with SSH forwarding
@@ -50,7 +51,7 @@ On your local machine, open a tunnel to the remote host:
 ssh -L 1455:localhost:1455 user@remote-host
 ```
 
-Run `codex-security login` in that SSH session and open its sign-in URL in
+Run `node sdk/typescript/bin/codex-security.mjs login` in that SSH session and open its sign-in URL in
 your local browser. Keep SSH connected until login finishes.
 
 ### OpenAI credentials
@@ -61,10 +62,10 @@ environment API key are available. Noninteractive commands prefer
 with `--auth`:
 
 ```bash
-codex-security scan . --auth chatgpt
-codex-security scan . --auth api-key
-codex-security patch OCCURRENCE_ID --auth chatgpt
-codex-security verify-fix OCCURRENCE_ID --auth api-key
+node sdk/typescript/bin/codex-security.mjs scan . --auth chatgpt
+node sdk/typescript/bin/codex-security.mjs scan . --auth api-key
+node sdk/typescript/bin/codex-security.mjs patch OCCURRENCE_ID --auth chatgpt
+node sdk/typescript/bin/codex-security.mjs verify-fix OCCURRENCE_ID --auth api-key
 ```
 
 `--auth chatgpt` ignores environment API keys. `--auth api-key` requires a key.
@@ -96,7 +97,7 @@ For the built-in OpenAI provider, choose `standard`, `daybreak_blue`, or
 `daybreak_red`:
 
 ```bash
-codex-security scan . --auth api-key --cyber-access-program daybreak_blue
+node sdk/typescript/bin/codex-security.mjs scan . --auth api-key --cyber-access-program daybreak_blue
 ```
 
 ```ts
@@ -130,10 +131,10 @@ For other providers, set their key and select a model the provider supports:
 
 ```bash
 export OPENROUTER_API_KEY="<your-openrouter-api-key>"
-codex-security scan . --provider openrouter --model anthropic/claude-sonnet-4.5
+node sdk/typescript/bin/codex-security.mjs scan . --provider openrouter --model anthropic/claude-sonnet-4.5
 
 export FIREWORKS_API_KEY="<your-fireworks-api-key>"
-codex-security scan . --provider fireworks --model accounts/fireworks/models/qwen3-235b-a22b
+node sdk/typescript/bin/codex-security.mjs scan . --provider fireworks --model accounts/fireworks/models/qwen3-235b-a22b
 ```
 
 ### Amazon Bedrock
@@ -143,7 +144,7 @@ Use AWS credentials and a region with access to the exact Bedrock model ID:
 ```bash
 export AWS_PROFILE="security-scan"
 export AWS_REGION="us-east-2"
-codex-security scan . --provider amazon-bedrock --model openai.gpt-5.6-luna
+node sdk/typescript/bin/codex-security.mjs scan . --provider amazon-bedrock --model openai.gpt-5.6-luna
 ```
 
 Run credential setup and the scan in the same shell or job. Bedrock scanning
@@ -161,10 +162,10 @@ reasoning-summary configuration.
 copying it into the checkout; the command saves it outside the repository.
 
 ```bash
-codex-security policy .
-codex-security policy . --path services/api
-codex-security policy . --knowledge-base architecture.md --model gpt-5.6-terra --effort high
-codex-security policy . --dry-run --json
+node sdk/typescript/bin/codex-security.mjs policy .
+node sdk/typescript/bin/codex-security.mjs policy . --path services/api
+node sdk/typescript/bin/codex-security.mjs policy . --knowledge-base architecture.md --model gpt-5.6-terra --effort high
+node sdk/typescript/bin/codex-security.mjs policy . --dry-run --json
 ```
 
 The repository defaults to the current directory. `--path` selects a component,
@@ -208,7 +209,7 @@ Use an empty output directory outside every enclosing checkout and its Git
 metadata, or keep the default location in the Codex Security state directory:
 
 ```bash
-codex-security policy . --path services/api --headless \
+node sdk/typescript/bin/codex-security.mjs policy . --path services/api --headless \
   --output-dir /path/outside/repository/api-policy --json
 ```
 
@@ -232,7 +233,7 @@ and keeps completed documents. Fix the problem and retry in a new directory.
 ### Generate a policy from TypeScript
 
 ```ts
-import { CodexSecurity } from "@openai/codex-security";
+import { CodexSecurity } from "./sdk/typescript/dist/index.js";
 
 const security = new CodexSecurity();
 try {
@@ -261,11 +262,11 @@ callback, questions remain unresolved.
 ## Scan options and output
 
 ```bash
-codex-security scan .
-codex-security scan . --path src --path tests
-codex-security scan . --diff origin/main --json
-codex-security scan . --working-tree
-codex-security scan . --output-dir /path/outside/repository/results --dry-run
+node sdk/typescript/bin/codex-security.mjs scan .
+node sdk/typescript/bin/codex-security.mjs scan . --path src --path tests
+node sdk/typescript/bin/codex-security.mjs scan . --diff origin/main --json
+node sdk/typescript/bin/codex-security.mjs scan . --working-tree
+node sdk/typescript/bin/codex-security.mjs scan . --output-dir /path/outside/repository/results --dry-run
 ```
 
 `--diff` scans committed changes; `--working-tree` scans staged and unstaged
@@ -299,9 +300,9 @@ See [Exports and CI](#exports-and-ci) for exit codes and CI examples.
 ### Project files
 
 ```bash
-codex-security init
-codex-security scan . -c codex-security.yaml --dry-run --json
-codex-security info -c codex-security.yaml --json
+node sdk/typescript/bin/codex-security.mjs init
+node sdk/typescript/bin/codex-security.mjs scan . -c codex-security.yaml --dry-run --json
+node sdk/typescript/bin/codex-security.mjs info -c codex-security.yaml --json
 ```
 
 Select a YAML or JSON file with `-c`, or set `CODEX_SECURITY_PROJECT_CONFIG`.
@@ -320,9 +321,9 @@ from the config directory; scope paths resolve from the repository.
 ### Import findings as a saved scan
 
 ```bash
-codex-security scan import --csv /path/to/findings.csv
-codex-security scan import --json /path/to/findings.json --format json
-codex-security scan import --csv /path/to/findings.csv --dry-run
+node sdk/typescript/bin/codex-security.mjs scan import --csv /path/to/findings.csv
+node sdk/typescript/bin/codex-security.mjs scan import --json /path/to/findings.json --format json
+node sdk/typescript/bin/codex-security.mjs scan import --csv /path/to/findings.csv --dry-run
 ```
 
 Supply exactly one input. CSV follows the
@@ -343,7 +344,7 @@ reimports the retained input.
 ### Generate mock scan results
 
 ```bash
-codex-security scan /path/to/repository --mock
+node sdk/typescript/bin/codex-security.mjs scan /path/to/repository --mock
 ```
 
 The SDK equivalent is `security.run(repository, { mock: true })`. Mock scans
@@ -365,7 +366,7 @@ Scan prompts and knowledge bases do not change the fixtures.
 Pass a stable hashed ID when scanning on behalf of users:
 
 ```bash
-codex-security scan . --auth api-key --safety-identifier hashed-user-id
+node sdk/typescript/bin/codex-security.mjs scan . --auth api-key --safety-identifier hashed-user-id
 ```
 
 ```ts
@@ -389,7 +390,7 @@ omit the ID.
 scan for each component:
 
 ```bash
-codex-security scan-components /path/to/project \
+node sdk/typescript/bin/codex-security.mjs scan-components /path/to/project \
   --component apps/api --component apps/web --component packages/shared \
   --workers 4 --output-dir /path/outside/project/results
 ```
@@ -399,9 +400,9 @@ and severity policy. Component plans override the file's scope. Use `--auto` to
 propose a split, then review the saved plan:
 
 ```bash
-codex-security scan-components . --auto --plan-only \
+node sdk/typescript/bin/codex-security.mjs scan-components . --auto --plan-only \
   --output-dir /path/outside/project/plan
-codex-security scan-components . \
+node sdk/typescript/bin/codex-security.mjs scan-components . \
   --components-file /path/outside/project/plan/components.json \
   --output-dir /path/outside/project/results
 ```
@@ -426,6 +427,13 @@ groups high-confidence root-cause matches, keeping original IDs and the highest
 severity. Uncertain matches stay separate. `summary.json` records coverage and
 matching status; `report.md` links to component reports. Export or publish each
 individual scan folder.
+
+When the shared settings select Deep mode, the combined artifact uses the
+`functional-bug-scan.component-findings` contract. It groups only findings with
+the same functional-bug fingerprint, keeps the highest P0–P3 priority, merges
+source locations and validation evidence, and leaves unvalidated hypotheses in
+their own section. `summary.json` and `report.md` include distinct bug totals and
+priority counts without converting them to security severities.
 
 Failures do not stop other components. Failed scans, incomplete coverage, or
 failed matching return `2`; severity-policy violations return `1`. Retry with
@@ -456,10 +464,11 @@ await security.run("/path/to/repository", {
 ```
 
 For `scan --mode deep`, `--workers` controls discovery concurrency and
-`--subagents` controls subagents per worker. `--stop-after-no-new`,
+`--subagents` controls investigators per worker. Defaults are `2` workers and
+`1` investigator per worker. `--stop-after-no-new`,
 `--max-discovery-runs`, and `--max-time-hours` stop discovery by novelty, count,
 or duration. At the deadline, discovery stops; the scan then combines and returns
-completed findings.
+completed bugs and any deferred hypotheses.
 
 Use project-file `scan.deep` settings or legacy
 `$CODEX_HOME/codex-security/config.toml` defaults. Counts must be positive except
@@ -480,7 +489,7 @@ parent and up to eight delegated workers. That limit is separate from Deep Scan
 and bulk worker counts.
 
 ```bash
-codex-security scan . --model gpt-6.1-sol --effort high \
+node sdk/typescript/bin/codex-security.mjs scan . --model gpt-6.1-sol --effort high \
   --codex features.multi_agent_v2.max_concurrent_threads_per_session=4
 ```
 
@@ -504,7 +513,7 @@ rejected. Multi-agent v2 must remain enabled; `agents.max_threads` is unsupporte
 `analytics.enabled`. For a custom provider:
 
 ```bash
-codex-security patch "Security issue" --model gateway-model \
+node sdk/typescript/bin/codex-security.mjs patch "Security issue" --model gateway-model \
   --codex 'model_provider="gateway"' \
   --codex 'model_providers.gateway.name="Gateway"' \
   --codex 'model_providers.gateway.base_url="https://gateway.example.test/v1"' \
@@ -619,7 +628,7 @@ save failures keep the existing limit. `onCost(cost, maxCostUsd)` reports change
 
 ## Bulk scans
 
-Run `gh auth login`, then `codex-security bulk-scan` for interactive GitHub
+Run `gh auth login`, then `node sdk/typescript/bin/codex-security.mjs bulk-scan` for interactive GitHub
 selection. It lists repositories pushed in the last 90 days, excluding forks
 and archives, asks for output, and saves the selection as `repositories.csv`.
 Private checkouts use your GitHub CLI login.
@@ -633,7 +642,7 @@ service,https://github.com/example/service.git,0123456789abcdef0123456789abcdef0
 ```
 
 ```bash
-codex-security bulk-scan repositories.csv \
+node sdk/typescript/bin/codex-security.mjs bulk-scan repositories.csv \
   --output-dir /path/outside/repositories/results --workers 4
 ```
 
@@ -652,12 +661,19 @@ the campaign, skips completed results, and starts pending attempts. Occupied
 attempt directories stop that repository and suggest `--recover`.
 Changed project configuration requires a new output directory.
 
+Deep bug scans add `reviewType`, `findingCount`, `bugFindingCount`, and
+`bugPriorityCounts` to each completed receipt in `results.jsonl`. The JSON
+campaign summary includes the validated bug total and P0–P3 counts when all
+completed Deep scans have typed findings receipts. A skipped receipt written by
+an earlier version can be refreshed from its sealed functional-bug findings
+artifact during `--recover`.
+
 ### Recovering failed or interrupted bulk scans
 
 Use the original CSV, output directory, and options:
 
 ```bash
-codex-security bulk-scan repositories.csv \
+node sdk/typescript/bin/codex-security.mjs bulk-scan repositories.csv \
   --output-dir /path/outside/repositories/results --recover
 ```
 
@@ -686,7 +702,7 @@ completed severity-policy violations return `1` without retrying the scan.
 Replace the final validation step of a Standard or diff scan with a prompt:
 
 ```bash
-codex-security scan . --validation-prompt-file validation.md
+node sdk/typescript/bin/codex-security.mjs scan . --validation-prompt-file validation.md
 ```
 
 ```ts
@@ -742,8 +758,8 @@ again when rerunning.
 Preview selected completed scans before uploading:
 
 ```bash
-codex-security publish scan --to cloud --dry-run --json
-codex-security publish scan --scan SCAN_ID_A --scan SCAN_ID_B \
+node sdk/typescript/bin/codex-security.mjs publish scan --to cloud --dry-run --json
+node sdk/typescript/bin/codex-security.mjs publish scan --scan SCAN_ID_A --scan SCAN_ID_B \
   --to cloud --dry-run --json
 ```
 
@@ -763,7 +779,7 @@ directory or `results.jsonl`. Do not mix directories with `--scan`.
 Cloud also accepts exported CSV:
 
 ```bash
-codex-security publish scan --to cloud --csv /path/outside/repository/findings.csv
+node sdk/typescript/bin/codex-security.mjs publish scan --to cloud --csv /path/outside/repository/findings.csv
 ```
 
 CSV cannot combine with scan selectors. Use the
@@ -783,7 +799,7 @@ resend a confirmed upload.
 ## Publish completed scans to Linear
 
 ```bash
-codex-security publish scan --scan SCAN_ID --to linear --linear-team TEAM_ID
+node sdk/typescript/bin/codex-security.mjs publish scan --scan SCAN_ID --to linear --linear-team TEAM_ID
 ```
 
 Select one completed scan by ID, prefix, `latest`, or directory; omit the selector
@@ -801,7 +817,7 @@ over `--linear-api-key`, which exposes the key in shell history/process listings
 Keys are omitted from saved results; diagnostic messages remain unchanged.
 
 ```bash
-codex-security publish check /path/to/completed-scan \
+node sdk/typescript/bin/codex-security.mjs publish check /path/to/completed-scan \
   --to linear --linear-team TEAM_ID --json
 ```
 
@@ -819,7 +835,7 @@ unrecorded/concurrent publication. After interruption, inspect the handoff,
 evidence, and destination before retrying.
 
 ```ts
-import { publishScan } from "@openai/codex-security";
+import { publishScan } from "./sdk/typescript/dist/index.js";
 
 const publication = await publishScan("/path/to/completed-scan", {
   destination: "linear",
@@ -837,8 +853,8 @@ Options also include `projectId`, `linearApiKey`, and `assigneeId` (ID or email)
 Apply a rubric to completed findings without repeating discovery:
 
 ```bash
-codex-security classify-severity --scan latest --rubric /path/to/policy.md --json
-codex-security classify-severity --scan-dir /path/to/completed-scan --json
+node sdk/typescript/bin/codex-security.mjs classify-severity --scan latest --rubric /path/to/policy.md --json
+node sdk/typescript/bin/codex-security.mjs classify-severity --scan-dir /path/to/completed-scan --json
 ```
 
 Use exactly one of `--scan` (ID, prefix, or `latest`) and `--scan-dir`.
@@ -867,9 +883,9 @@ severity and add the classification rationale. Publication rejects incomplete or
 stale assessments. It never reclassifies or rereads the rubric at publication time.
 
 ```bash
-codex-security classify-severity --scan SCAN_ID --rubric /path/to/policy.md \
+node sdk/typescript/bin/codex-security.mjs classify-severity --scan SCAN_ID --rubric /path/to/policy.md \
   --finding-id FINDING_ID
-codex-security publish scan --scan SCAN_ID --to linear --linear-team TEAM_ID --dry-run
+node sdk/typescript/bin/codex-security.mjs publish scan --scan SCAN_ID --to linear --linear-team TEAM_ID --dry-run
 ```
 
 Linear publication also accepts `--finding-id`. If a classification exists, every
@@ -882,7 +898,7 @@ import {
   classifyScanSeverity,
   classifyScanDirectorySeverity,
   publishScan,
-} from "@openai/codex-security";
+} from "./sdk/typescript/dist/index.js";
 
 // Assess supplied reports in memory.
 const classification = await classifySeverity(findings, {
@@ -918,7 +934,7 @@ classification methods accept `signal`; keep human overrides in your workflow.
 ## Suggest finding owners
 
 ```bash
-codex-security suggest-owners findings.json --source-root /path/to/repo --json > owners.json
+node sdk/typescript/bin/codex-security.mjs suggest-owners findings.json --source-root /path/to/repo --json > owners.json
 ```
 
 Input is a findings document or `{ "findings": [...] }`. The source root
@@ -938,7 +954,7 @@ includes abstentions; `2` means invalid input or a failed recommendation, while
 retaining other results. Cancellation uses `130` or `143`.
 
 ```ts
-import { suggestOwners } from "@openai/codex-security";
+import { suggestOwners } from "./sdk/typescript/dist/index.js";
 
 const owners = await suggestOwners("/path/to/repo", result.findings.findings, {
   reasoningEffort: "high",
@@ -952,8 +968,8 @@ scan artifacts and record the analyzed revision and limitations.
 ## Feedback
 
 ```bash
-codex-security feedback --reason "The scan stopped before it finished"
-codex-security feedback SCAN_ID --reason "The scan stopped before it finished" --include-logs
+node sdk/typescript/bin/codex-security.mjs feedback --reason "The scan stopped before it finished"
+node sdk/typescript/bin/codex-security.mjs feedback SCAN_ID --reason "The scan stopped before it finished" --include-logs
 ```
 
 Share the returned ID with support. Without a selector, `feedback` uses the most
@@ -994,7 +1010,7 @@ current checkout/context files and do not reload project files. Supply replaceme
 scan and custom-validation prompts when the original used them:
 
 ```bash
-codex-security scans rerun SCAN_ID --scan-prompt-file instructions.md
+node sdk/typescript/bin/codex-security.mjs scans rerun SCAN_ID --scan-prompt-file instructions.md
 ```
 
 History lives in `$CODEX_SECURITY_STATE_DIR/workbench.sqlite3`, or
@@ -1005,8 +1021,8 @@ data even though scan recipes do not store credentials.
 ### Resuming an interrupted Deep Scan
 
 ```bash
-codex-security scans list --scan-root /path/to/security-scans
-codex-security scans resume SCAN_ID
+node sdk/typescript/bin/codex-security.mjs scans list --scan-root /path/to/security-scans
+node sdk/typescript/bin/codex-security.mjs scans resume SCAN_ID
 ```
 
 The scan must still be `running`, with its original checkout, output directory,
@@ -1031,7 +1047,7 @@ An absent finding is not resolved when the later scan is incomplete or excludes
 its scope. One comparison ID is compared with the latest completed scan.
 
 ```bash
-codex-security scans match --all --force --model gpt-6.1-sol --effort high
+node sdk/typescript/bin/codex-security.mjs scans match --all --force --model gpt-6.1-sol --effort high
 ```
 
 Only high-confidence root-cause matches are grouped. Uncertain and related
@@ -1044,7 +1060,7 @@ import { readFile } from "node:fs/promises";
 import {
   matchScanFindings,
   type FindingsDocument,
-} from "@openai/codex-security";
+} from "./sdk/typescript/dist/index.js";
 
 const before = JSON.parse(
   await readFile("/path/to/earlier-scan/findings.json", "utf8"),
@@ -1074,9 +1090,9 @@ directory or `--scan ID`. Findings require sealed results and support
 source-line fingerprints.
 
 ```bash
-codex-security export --scan SCAN_ID --export-format json --output findings.json
-codex-security export --artifact threat-model --output docs/threatmodel.md
-codex-security export /path/to/policy-results --artifact threat-model --output -
+node sdk/typescript/bin/codex-security.mjs export --scan SCAN_ID --export-format json --output findings.json
+node sdk/typescript/bin/codex-security.mjs export --artifact threat-model --output docs/threatmodel.md
+node sdk/typescript/bin/codex-security.mjs export /path/to/policy-results --artifact threat-model --output -
 ```
 
 Threat-model exports use Markdown and default to `./threatmodel.md`. Standard,
@@ -1094,7 +1110,7 @@ does not make the model scan input; pass it with `--knowledge-base`.
 document, or null. Export still works if the document could not be written.
 
 ```ts
-import { exportArtifact } from "@openai/codex-security";
+import { exportArtifact } from "./sdk/typescript/dist/index.js";
 
 const exported = await exportArtifact({
   source: { directory: "/path/to/scan-results" }, // Or { scanId: "SCAN_ID" }.
@@ -1117,7 +1133,7 @@ For CI, place output outside the checkout and set a severity threshold:
 
 ```bash
 SCAN_ROOT="$(mktemp -d)"
-codex-security scan . --diff origin/main \
+node sdk/typescript/bin/codex-security.mjs scan . --diff origin/main \
   --output-dir "$SCAN_ROOT/results" --json --fail-on-severity high \
   > "$SCAN_ROOT/findings.json"
 ```
@@ -1152,7 +1168,7 @@ unverified hooks/directories alone; contact their owner or use CI. If the direct
 belongs only to this repository and no hook exists, run from outside the checkout:
 
 ```bash
-codex-security install-hook /path/to/repository
+node sdk/typescript/bin/codex-security.mjs install-hook /path/to/repository
 ```
 
 To migrate an existing generated hook, verify it is a regular file used only by
@@ -1165,9 +1181,9 @@ installation fails. The installer respects `core.hooksPath`.
 ## Import alerts from the CLI
 
 ```bash
-codex-security import github example/repository --format json > /path/outside/repository/alerts.json
-codex-security import github example/repository --github-alert 12 --github-alert 18 --format json
-codex-security validate /path/outside/repository/alerts.json
+node sdk/typescript/bin/codex-security.mjs import github example/repository --format json > /path/outside/repository/alerts.json
+node sdk/typescript/bin/codex-security.mjs import github example/repository --github-alert 12 --github-alert 18 --format json
+node sdk/typescript/bin/codex-security.mjs validate /path/outside/repository/alerts.json
 ```
 
 Run validation from the matching local repository. Import defaults to open alerts
@@ -1186,7 +1202,7 @@ For a disposition per alert, import and validate through the SDK:
 import {
   CodexSecurity,
   importGitHubCodeScanningAlerts,
-} from "@openai/codex-security";
+} from "./sdk/typescript/dist/index.js";
 
 const findings = await importGitHubCodeScanningAlerts({
   repository: "example/repository",
@@ -1220,10 +1236,10 @@ or literal text and work in the current directory. Saved finding/occurrence IDs
 select their original repository for patching.
 
 ```bash
-codex-security validate "Possible SQL injection" --effort high
-codex-security patch OCCURRENCE_ID
-codex-security patch --scan SCAN_ID --severity high --json
-codex-security patch --scan SCAN_ID --assess-patch-risk --create-pr
+node sdk/typescript/bin/codex-security.mjs validate "Possible SQL injection" --effort high
+node sdk/typescript/bin/codex-security.mjs patch OCCURRENCE_ID
+node sdk/typescript/bin/codex-security.mjs patch --scan SCAN_ID --severity high --json
+node sdk/typescript/bin/codex-security.mjs patch --scan SCAN_ID --assess-patch-risk --create-pr
 ```
 
 `--scan latest` uses the current repository's latest completed scan. Patching
@@ -1249,7 +1265,7 @@ File changes alone do not prove a fix; saved findings require a verified result.
 For a controlled container providing its own isolation:
 
 ```bash
-codex-security patch "Security issue" --external-sandbox --json
+node sdk/typescript/bin/codex-security.mjs patch "Security issue" --external-sandbox --json
 ```
 
 This explicit option disables Codex filesystem/network enforcement for the patch
@@ -1270,7 +1286,7 @@ For self-hosted GitLab, set `GITLAB_HOST` to that host and authenticate with
 `glab auth login --hostname HOST`. `GITLAB_URI` and `GL_HOST` are fallback aliases.
 
 ```bash
-GITLAB_HOST=gitlab.example.com codex-security patch --scan SCAN_ID --create-pr
+GITLAB_HOST=gitlab.example.com node sdk/typescript/bin/codex-security.mjs patch --scan SCAN_ID --create-pr
 ```
 
 Both providers return `pullRequest: { branch, url }`. Supplied-issue patching

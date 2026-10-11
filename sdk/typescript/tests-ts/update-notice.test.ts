@@ -21,6 +21,8 @@ describe("CLI update notice", () => {
     let requestedUrl: string | undefined;
     const notice = await checkForUpdate({
       environment: { npm_command: "exec" },
+      entrypoint:
+        "/fixture/node_modules/@openai/codex-security/bin/codex-security.mjs",
       currentVersion: "0.1.0",
       fetch: async (url) => {
         requestedUrl = url.toString();
@@ -114,10 +116,29 @@ describe("CLI update notice", () => {
         "/release/.install/node_modules/pkg",
         "download and extract the latest Codex Security release",
       ],
-      [{}, "/workspace/src/version.ts", `npx ${packageName}`],
+      [
+        {},
+        "/workspace/src/version.ts",
+        "update the source checkout and rebuild the CLI",
+      ],
     ] as const) {
       expect(updateCommand(environment, entrypoint)).toBe(command);
     }
+  });
+
+  test("does not check the upstream registry from a source checkout", async () => {
+    let requested = false;
+    const notice = await checkForUpdate({
+      entrypoint: "/checkout/sdk/typescript/bin/codex-security.mjs",
+      environment: {},
+      fetch: async () => {
+        requested = true;
+        return new Response(JSON.stringify({ version: "9.9.9" }));
+      },
+    });
+
+    expect(notice).toBeUndefined();
+    expect(requested).toBe(false);
   });
 
   test("ignores current, older, invalid, and lower prerelease versions", async () => {

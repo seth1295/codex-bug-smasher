@@ -64,15 +64,16 @@ const hoursError = `must be a positive number no greater than ${maximumHours}`;
 export const DeepScanSettingsSchema = z.strictObject({
   workers: positiveInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.workers,
-    description: "Maximum concurrent deep-scan discovery workers.",
+    description: "Maximum concurrent functional bug-scan discovery workers.",
   }),
   subagents: nonnegativeInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.subagents,
-    description: "Subagents available to each deep-scan worker. Zero is valid.",
+    description:
+      "Investigator subagents available to each bug-scan worker. Zero is valid.",
   }),
   stopAfterNoNew: positiveInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.stopAfterNoNew,
-    description: "Stop after this many runs find no new issues.",
+    description: "Stop after this many complete review runs find no new bugs.",
   }),
   stopAfterConsecutiveErrors: positiveInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.stopAfterConsecutiveErrors,
@@ -80,7 +81,7 @@ export const DeepScanSettingsSchema = z.strictObject({
   }),
   maxDiscoveryRuns: positiveInteger.optional().meta({
     default: DEFAULT_DEEP_SCAN_SETTINGS.maxDiscoveryRuns,
-    description: "Maximum deep-scan discovery runs.",
+    description: "Maximum independent bug-scan discovery runs.",
   }),
   maxTimeHours: z
     .number({ error: hoursError })
@@ -90,7 +91,7 @@ export const DeepScanSettingsSchema = z.strictObject({
     .meta({
       default: DEFAULT_DEEP_SCAN_SETTINGS.maxTimeHours,
       description:
-        "Maximum deep-scan discovery hours (default: 96; maximum: 96).",
+        "Maximum bug-scan discovery hours (default: 96; maximum: 96).",
     }),
 });
 

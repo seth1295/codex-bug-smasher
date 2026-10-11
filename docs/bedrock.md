@@ -1,10 +1,10 @@
 # Amazon Bedrock setup and verification
 
-Codex Security uses Codex's native `amazon-bedrock` provider. Install
-`@openai/codex-security` normally; it includes the Codex executable and security
-plugin. No customer connector or API adapter is needed. Use the current release;
-version `0.1.27` and later includes the Bedrock reasoning-summary default and its
-propagation to Deep Scan workers.
+Codex Security uses Codex's native `amazon-bedrock` provider. Build and run the
+checked-out CLI using the repository root README. In examples below, invoke it
+with `node sdk/typescript/bin/codex-security.mjs`. No customer connector or API
+adapter is needed. The checked-out source includes the Bedrock reasoning-summary
+default and its propagation to Deep Scan workers.
 
 ## Select AWS credentials and a model
 
@@ -14,7 +14,7 @@ an existing AWS profile:
 ```bash
 export AWS_PROFILE="security-scan"
 export AWS_REGION="us-east-2"
-npx @openai/codex-security scan /path/to/repository \
+node sdk/typescript/bin/codex-security.mjs scan /path/to/repository \
   --provider amazon-bedrock --model openai.gpt-5.6-luna
 ```
 
@@ -85,14 +85,14 @@ After that AWS access is granted, use your AWS credentials:
 ```bash
 export AWS_PROFILE="security-scan"
 export AWS_REGION="us-east-2"
-npx @openai/codex-security scan /path/to/repository \
+node sdk/typescript/bin/codex-security.mjs scan /path/to/repository \
   --provider amazon-bedrock --model openai.gpt-daybreak-blue-5.6-sol --effort high
 ```
 
 For separately approved Red access, use:
 
 ```bash
-npx @openai/codex-security scan /path/to/repository \
+node sdk/typescript/bin/codex-security.mjs scan /path/to/repository \
   --provider amazon-bedrock --model openai.gpt-5.6-cyber --effort high
 ```
 

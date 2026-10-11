@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile as nodeExecFile } from "node:child_process";
 import { mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { importSource } from "./import-module.ts";
 
@@ -10,7 +11,7 @@ const execFile = promisify(nodeExecFile);
 const temporaryDirectories = createTemporaryDirectories(true);
 
 const inventory = await importSource(
-  new URL("../src/artifact-inventory.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-inventory.ts", import.meta.url)),
 );
 
 try {
@@ -433,7 +434,7 @@ async function createFixture(label: string) {
   const repoRoot = path.join(fixtureRoot, "repository");
   const scanRoot = path.join(fixtureRoot, "scan");
   const workerRoot = path.join(fixtureRoot, "worker");
-  const pluginRoot = new URL("../../", import.meta.url).pathname;
+  const pluginRoot = fileURLToPath(new URL("../../", import.meta.url));
   await mkdir(repoRoot, { recursive: true });
   await mkdir(scanRoot, { recursive: true });
   return {
@@ -460,7 +461,9 @@ async function createFixture(label: string) {
       layout: "scan",
       scope: ".",
       pluginRoot,
-      pythonCommand: process.env.PYTHON ?? "python3",
+      pythonCommand:
+        process.env.PYTHON?.trim() ||
+        (process.platform === "win32" ? "python" : "python3"),
     },
     worker: {
       root: workerRoot,

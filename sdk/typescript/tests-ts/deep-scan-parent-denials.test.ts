@@ -5,7 +5,12 @@ import { expect, test } from "bun:test";
 import { parse } from "smol-toml";
 import { loadBundledRuntime } from "./plugin-root.js";
 
-type Sandbox = { filesystemDenies: string[]; globScanMaxDepth?: number };
+type Sandbox = {
+  filesystemDenies: string[];
+  filesystemReadRoots: string[];
+  filesystemUnrestricted: boolean;
+  globScanMaxDepth?: number;
+};
 
 async function bundledPolicy() {
   const runtime = await loadBundledRuntime();
@@ -15,7 +20,7 @@ async function bundledPolicy() {
   expect(end).toBeGreaterThan(start);
   const source = runtime.slice(start, end);
   const recordSource = runtime.match(
-    /\/\/ src\/record\.ts\n[\s\S]*?(?=\n\/\/ )/u,
+    /\/\/ [^\r\n]*\/src\/record\.ts\r?\n[\s\S]*?(?=\n\/\/ )/u,
   )?.[0];
   expect(recordSource).toBeDefined();
   const imports = [
@@ -44,7 +49,7 @@ async function bundledPolicy() {
   ]
     .map((name) => {
       const definition = new RegExp(
-        `function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`,
+        `function ${name}\\([\\s\\S]*?\\)\\s*\\{[\\s\\S]*?\\n\\}`,
         "u",
       ).exec(runtime)?.[0];
       if (!definition) throw new Error(`Missing bundled function: ${name}`);
@@ -98,6 +103,8 @@ test("preserves literal parent deny paths and globs without parent write grants"
   );
   expect(sandbox).toEqual({
     filesystemDenies: [denied, glob],
+    filesystemReadRoots: [],
+    filesystemUnrestricted: false,
     globScanMaxDepth: 8,
   });
   expect(parse(policy.overrides(sandbox).join("\n"))).toEqual({

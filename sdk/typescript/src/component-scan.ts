@@ -21,7 +21,12 @@ import {
 import type { ScanCost, ScanSessionEvent } from "./cost.js";
 import { readThreatModelPath } from "./artifact-export.js";
 import { errorMessage } from "./errors.js";
-import type { CoverageCompleteness, Finding } from "./models.js";
+import type {
+  BugFinding,
+  BugPriority,
+  CoverageCompleteness,
+  Finding,
+} from "./models.js";
 import type { ScanResult } from "./result.js";
 import type { ScanActivity } from "./scan-activity.js";
 import type { ScanSettings } from "./scan-settings.js";
@@ -70,6 +75,8 @@ export interface ComponentReceipt {
   threatModelPath?: string;
   coverage?: CoverageCompleteness;
   findingCount?: number;
+  reviewType?: "security" | "functional_bug";
+  priorityCounts?: Record<BugPriority, number>;
   cost?: Readonly<ScanCost>;
   error?: string;
 }
@@ -96,6 +103,17 @@ interface CombinedFinding {
   sources: FindingSource[];
 }
 
+interface CombinedBugFinding {
+  finding: BugFinding;
+  sources: FindingSource[];
+}
+
+interface BugHypothesisSource {
+  componentId: string;
+  scanId: string;
+  scanDir: string;
+}
+
 export interface ComponentDeduplicationSummary {
   status: "completed" | "incomplete";
   confirmedGroups: number;
@@ -115,6 +133,9 @@ export interface ComponentScanResult {
   retryPlanPath?: string;
   findingCount?: number;
   sourceFindingCount?: number;
+  reviewType?: "security" | "functional_bug";
+  priorityCounts?: Record<BugPriority, number>;
+  sourcePriorityCounts?: Record<BugPriority, number>;
   deduplication?: ComponentDeduplicationSummary;
   policyFailed?: boolean;
 }
@@ -132,7 +153,9 @@ export async function runComponentScans(
   if (auth !== undefined && auth !== "auto") {
     const source = environment ?? process.env;
     const provider = scanModelProvider(
-      await mergedCodexConfig(options.config ?? {}),
+      await mergedCodexConfig(options.config ?? {}, {
+        mode: options.scanOptions?.mode,
+      }),
     );
     scanAuthentication(source, auth, provider);
     environment = selectedScanEnvironment(source, auth, provider);
@@ -153,6 +176,7 @@ export async function runComponentScans(
     repository,
     options.auto
       ? await (options.planComponents ?? planComponents)(repository, {
+          mode: options.scanOptions?.mode,
           auth,
           cyberAccessProgram: options.scanOptions?.cyberAccessProgram,
           config: options.config,
@@ -222,7 +246,15 @@ export async function runComponentScans(
             results.set(receipt.id, result);
             receipt.scanId = result.manifest.scan.id;
             receipt.coverage = result.coverage.completeness;
-            receipt.findingCount = result.findings.findings.length;
+            receipt.reviewType = result.reviewType;
+            receipt.findingCount =
+              result.bugFindings?.findings.length ??
+              result.findings.findings.length;
+            if (result.bugFindings !== null) {
+              receipt.priorityCounts = countBugPriorities(
+                result.bugFindings.findings,
+              );
+            }
             if (result.cost !== null) receipt.cost = result.cost;
             receipt.status =
               receipt.coverage === "complete" ? "completed" : "incomplete";
@@ -257,11 +289,40 @@ export async function runComponentScans(
       notify(() => options.onProgress?.(copyReceipt(receipt)));
     }
   }
-  const { findings, matches, uncertain, related, error } =
-    await deduplicateFindings(receipts, results, { ...options, environment });
+  const bugScan =
+    options.scanOptions?.mode === "deep" ||
+    [...results.values()].some(
+      (result) => result.reviewType === "functional_bug",
+    );
+  if (
+    bugScan &&
+    [...results.values()].filter(
+      (result) => result.reviewType === "functional_bug",
+    ).length > 1
+  ) {
+    notify(() => options.onDeduplicationStarted?.());
+  }
+  const bugAggregation = bugScan
+    ? deduplicateBugFindings(receipts, results)
+    : undefined;
+  const securityAggregation = bugScan
+    ? undefined
+    : await deduplicateFindings(receipts, results, {
+        ...options,
+        environment,
+      });
+  const findings = securityAggregation?.findings ?? [];
+  const matches = securityAggregation?.matches ?? [];
+  const uncertain = securityAggregation?.uncertain ?? [];
+  const related = securityAggregation?.related;
+  const error = securityAggregation?.error;
+  const findingCount = bugAggregation?.findings.length ?? findings.length;
+  const sourceFindingCount =
+    bugAggregation?.sourceFindingCount ??
+    findings.reduce((total, finding) => total + finding.sources.length, 0);
   const deduplication: ComponentDeduplicationSummary = {
     status: error === undefined ? "completed" : "incomplete",
-    confirmedGroups: matches.length,
+    confirmedGroups: bugAggregation?.duplicateGroupCount ?? matches.length,
     uncertainPairs: uncertain.length,
     ...(error === undefined ? {} : { error }),
   };
@@ -284,11 +345,17 @@ export async function runComponentScans(
     findingsPath: join(output, "findings.json"),
     reportPath: join(output, "report.md"),
     ...(retryPlanPath === undefined ? {} : { retryPlanPath }),
-    findingCount: findings.length,
-    sourceFindingCount: findings.reduce(
-      (total, finding) => total + finding.sources.length,
-      0,
-    ),
+    findingCount,
+    sourceFindingCount,
+    reviewType: bugScan ? ("functional_bug" as const) : ("security" as const),
+    ...(bugAggregation === undefined
+      ? {}
+      : {
+          priorityCounts: countBugPriorities(
+            bugAggregation.findings.map(({ finding }) => finding),
+          ),
+          sourcePriorityCounts: bugAggregation.sourcePriorityCounts,
+        }),
     deduplication,
     ...(failureSeverity === undefined
       ? {}
@@ -298,12 +365,26 @@ export async function runComponentScans(
           ),
         }),
   };
-  await writeJson(summary.findingsPath, {
-    documentType: "codex-security.component-findings",
-    schemaVersion: "1.0",
-    findings,
-    deduplication: { ...deduplication, matches, uncertain, related },
-  });
+  if (bugAggregation === undefined) {
+    await writeJson(summary.findingsPath, {
+      documentType: "codex-security.component-findings",
+      schemaVersion: "1.0",
+      findings,
+      deduplication: { ...deduplication, matches, uncertain, related },
+    });
+  } else {
+    await writeJson(summary.findingsPath, {
+      documentType: "functional-bug-scan.component-findings",
+      schemaVersion: "1.0",
+      findings: bugAggregation.findings,
+      hypotheses: bugAggregation.hypotheses,
+      findingCount: summary.findingCount,
+      sourceFindingCount: summary.sourceFindingCount,
+      priorityCounts: summary.priorityCounts,
+      sourcePriorityCounts: summary.sourcePriorityCounts,
+      deduplication: deduplication,
+    });
+  }
   await writeJson(summary.summaryPath, {
     ...summary,
     repository,
@@ -317,13 +398,165 @@ export async function runComponentScans(
   });
   await writeFile(
     summary.reportPath,
-    renderReport(summary, receipts, findings),
+    bugAggregation === undefined
+      ? renderReport(summary, receipts, findings)
+      : renderBugReport(summary, receipts, bugAggregation),
     { flag: "wx", mode: 0o600 },
   );
   notify(() => options.onComplete?.(summary));
   options.signal?.throwIfAborted();
   if (failed?.status === "rejected") throw failed.reason;
   return summary;
+}
+
+function countBugPriorities(
+  findings: readonly BugFinding[],
+): Record<BugPriority, number> {
+  const counts: Record<BugPriority, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const { priority } of findings)
+    counts[priority] = (counts[priority] ?? 0) + 1;
+  return counts;
+}
+
+function deduplicateBugFindings(
+  receipts: ComponentReceipt[],
+  results: Map<string, ScanResult>,
+): {
+  findings: CombinedBugFinding[];
+  hypotheses: {
+    hypothesis: Record<string, unknown>;
+    sources: BugHypothesisSource[];
+  }[];
+  sourceFindingCount: number;
+  sourcePriorityCounts: Record<BugPriority, number>;
+  duplicateGroupCount: number;
+} {
+  const groups = new Map<string, CombinedBugFinding>();
+  const hypotheses: {
+    hypothesis: Record<string, unknown>;
+    sources: BugHypothesisSource[];
+  }[] = [];
+  const sourcePriorityCounts: Record<BugPriority, number> = {
+    P0: 0,
+    P1: 0,
+    P2: 0,
+    P3: 0,
+  };
+  let sourceFindingCount = 0;
+  for (const receipt of receipts) {
+    const result = results.get(receipt.id);
+    const document = result?.bugFindings;
+    if (document === null || document === undefined) continue;
+    for (const finding of document.findings) {
+      sourceFindingCount += 1;
+      sourcePriorityCounts[finding.priority] =
+        (sourcePriorityCounts[finding.priority] ?? 0) + 1;
+      const source: FindingSource = {
+        componentId: receipt.id,
+        scanId: receipt.scanId!,
+        occurrenceId: finding.occurrenceId,
+        scanDir: receipt.outputDir,
+      };
+      const existing = groups.get(finding.fingerprints.primary);
+      if (existing === undefined) {
+        groups.set(finding.fingerprints.primary, {
+          finding,
+          sources: [source],
+        });
+      } else {
+        existing.sources.push(source);
+        existing.finding = mergeBugFindings(existing.finding, finding);
+      }
+    }
+    for (const hypothesis of document.hypotheses) {
+      hypotheses.push({
+        hypothesis,
+        sources: [
+          {
+            componentId: receipt.id,
+            scanId: receipt.scanId!,
+            scanDir: receipt.outputDir,
+          },
+        ],
+      });
+    }
+  }
+  const findings = [...groups.values()].sort(
+    (first, second) =>
+      bugPriorityRank(first.finding.priority) -
+        bugPriorityRank(second.finding.priority) ||
+      first.finding.title.localeCompare(second.finding.title),
+  );
+  return {
+    findings,
+    hypotheses,
+    sourceFindingCount,
+    sourcePriorityCounts,
+    duplicateGroupCount: findings.filter(({ sources }) => sources.length > 1)
+      .length,
+  };
+}
+
+function bugPriorityRank(priority: BugPriority): number {
+  return (["P0", "P1", "P2", "P3"] as const).indexOf(priority);
+}
+
+function mergeBugFindings(first: BugFinding, second: BugFinding): BugFinding {
+  const preferred =
+    bugPriorityRank(second.priority) < bugPriorityRank(first.priority)
+      ? second
+      : first;
+  const locations = new Map(
+    [...first.locations, ...second.locations].map((location) => [
+      `${location.path}:${location.startLine}:${location.endLine ?? ""}`,
+      location,
+    ]),
+  );
+  const uniqueOptionalStrings = (
+    ...groups: (readonly string[] | undefined)[]
+  ): string[] | undefined => {
+    const values = [...new Set(groups.flatMap((group) => group ?? []))];
+    return values.length === 0 ? undefined : values;
+  };
+  const reproduction = uniqueOptionalStrings(
+    first.validation.reproduction,
+    second.validation.reproduction,
+  );
+  const counterEvidence = uniqueOptionalStrings(
+    first.validation.counterEvidence,
+    second.validation.counterEvidence,
+  );
+  const tests = uniqueOptionalStrings(first.tests, second.tests);
+  const sourceFindings = [
+    ...(first.provenance.sourceFindings ?? []),
+    ...(second.provenance.sourceFindings ?? []),
+  ];
+  return {
+    ...preferred,
+    locations: [...locations.values()],
+    validation: {
+      ...preferred.validation,
+      evidence: [
+        ...new Set([
+          ...first.validation.evidence,
+          ...second.validation.evidence,
+        ]),
+      ],
+      ...(reproduction === undefined ? {} : { reproduction }),
+      ...(counterEvidence === undefined ? {} : { counterEvidence }),
+    },
+    ...(tests === undefined ? {} : { tests }),
+    provenance: {
+      ...preferred.provenance,
+      sourceFindingIds: [
+        ...new Set([
+          ...(first.provenance.sourceFindingIds ?? []),
+          ...(second.provenance.sourceFindingIds ?? []),
+        ]),
+      ],
+      ...(sourceFindings.length === 0 ? {} : { sourceFindings }),
+    },
+  };
 }
 
 async function deduplicateFindings(
@@ -371,6 +604,7 @@ async function deduplicateFindings(
         { before: [...previous], after: current },
         {
           allowHistoricalUncertainty: true,
+          mode: options.scanOptions?.mode,
           auth: options.scanOptions?.auth,
           cyberAccessProgram: options.scanOptions?.cyberAccessProgram,
           config: options.config ?? {},
@@ -493,6 +727,96 @@ function renderReport(
         `- ${finding.severity.level}: ${finding.title} (${sources.map(({ componentId }) => `[${componentId}](./${componentId}/report.md)`).join(", ")})`,
     ),
     "",
+  ].join("\n");
+}
+
+function renderBugReport(
+  summary: ComponentScanResult,
+  receipts: ComponentReceipt[],
+  aggregation: ReturnType<typeof deduplicateBugFindings>,
+): string {
+  const prioritySummary = Object.entries(summary.priorityCounts ?? {})
+    .filter(([, count]) => count !== undefined && count > 0)
+    .map(([priority, count]) => `${priority}: ${count}`)
+    .join(", ");
+  return [
+    "# Functional bug component report",
+    "",
+    `${summary.completed} complete, ${summary.incomplete} incomplete, ${summary.failed} failed. ${summary.sourceFindingCount ?? 0} validated bugs across components, grouped into ${summary.findingCount ?? 0} distinct bugs${prioritySummary ? ` (${prioritySummary})` : ""}.`,
+    ...(summary.deduplication?.status === "incomplete"
+      ? ["", `Bug grouping is incomplete: ${summary.deduplication.error}`]
+      : []),
+    "",
+    "Coverage applies only to the selected components. See each scan for reviewed areas, exclusions, and deferred work.",
+    ...(summary.retryPlanPath === undefined
+      ? []
+      : [
+          "",
+          "[Retry plan for failed or incomplete components](./retry-components.json)",
+        ]),
+    "",
+    "## Components",
+    "",
+    ...receipts.map(
+      (receipt) =>
+        `- ${JSON.stringify(receipt.name)}: ${receipt.status}. ${receipt.findingCount ?? 0} validated bug${receipt.findingCount === 1 ? "" : "s"}. [Scan files](./${receipt.id}/)${receipt.error ? ` — ${receipt.error}` : ""}`,
+    ),
+    "",
+    "## Validated bugs",
+    "",
+    ...(aggregation.findings.length === 0
+      ? ["No validated functional bugs were reported."]
+      : aggregation.findings.map(
+          ({ finding, sources }) =>
+            `- ${finding.priority} (${finding.confidence.level} confidence): ${finding.title} — ${sources.map(({ componentId }) => `[${componentId}](./${componentId}/report.md)`).join(", ")}`,
+        )),
+    ...(aggregation.hypotheses.length === 0
+      ? []
+      : [
+          "",
+          "## Unvalidated hypotheses",
+          "",
+          ...aggregation.hypotheses.map(
+            ({ hypothesis, sources }) =>
+              `- ${String(hypothesis["title"] ?? hypothesis["id"] ?? "Unvalidated candidate")}: ${sources.map(({ componentId }) => `[${componentId}](./${componentId}/report.md)`).join(", ")}`,
+          ),
+        ]),
+    "",
+    "## Deduplicated bug details",
+    "",
+    ...aggregation.findings.flatMap(({ finding, sources }) => [
+      `### ${finding.priority}: ${finding.title}`,
+      "",
+      finding.summary,
+      "",
+      `Locations: ${finding.locations.map(({ path, startLine, endLine }) => `${path}:${startLine}${endLine === undefined ? "" : `-${endLine}`}`).join(", ")}`,
+      "",
+      `Expected: ${finding.expected}`,
+      "",
+      `Actual: ${finding.actual}`,
+      "",
+      `Impact: ${finding.impact}`,
+      "",
+      `Validation: ${finding.validation.method}. ${finding.validation.evidence.join(" ")}`,
+      "",
+      ...(finding.validation.reproduction?.length
+        ? [`Reproduction: ${finding.validation.reproduction.join(" ")}`, ""]
+        : []),
+      ...(finding.validation.counterEvidence?.length
+        ? [
+            `Counterevidence considered: ${finding.validation.counterEvidence.join(" ")}`,
+            "",
+          ]
+        : []),
+      ...(finding.suggestedCorrection
+        ? [`Suggested correction: ${finding.suggestedCorrection}`, ""]
+        : []),
+      ...(finding.tests?.length
+        ? [`Relevant tests: ${finding.tests.join("; ")}`, ""]
+        : []),
+      `Source components: ${sources.map(({ componentId }) => componentId).join(", ")}`,
+      "",
+    ]),
   ].join("\n");
 }
 

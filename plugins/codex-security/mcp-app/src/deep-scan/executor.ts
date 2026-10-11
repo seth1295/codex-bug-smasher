@@ -6,12 +6,14 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import {
   delimiter,
   dirname,
   isAbsolute,
   join,
+  posix,
   resolve,
   win32,
 } from "node:path";
@@ -19,6 +21,7 @@ import { Codex, type CyberAccessProgram } from "@openai/codex-sdk";
 import { parse as parseToml } from "smol-toml";
 import { executablePathForSpawn } from "./executable-path.js";
 import {
+  abortError,
   classifyCodexWorkerError,
   DeepScanNonRetryableError,
 } from "./errors.js";
@@ -46,6 +49,8 @@ export interface CodexSdkWorkerModelSettings {
 export interface CodexSdkWorkerArtifactContext {
   pluginRoot: string;
   repoRoot: string;
+  sourceReadRoots: readonly string[];
+  sourceReadRootsError?: string;
   scanId: string;
   scope?: string;
   pythonCommand?: string;
@@ -76,7 +81,10 @@ export class CodexSdkWorkerExecutor implements CodexWorkerExecutor {
           "Deep Scan cannot start a read-only worker without verified parent sandbox metadata.",
         );
       }
-      const workerProfile = workerPermissionProfile(parentSandbox);
+      const workerProfile = workerPermissionProfile(
+        parentSandbox,
+        this.modelSettings.artifactContext,
+      );
       const configOverrides =
         workerPermissionProfileConfigOverrides(workerProfile);
       const originalCwd = process.cwd();
@@ -110,6 +118,17 @@ export class CodexSdkWorkerExecutor implements CodexWorkerExecutor {
           allowOpenAiApiKeyFallback: Boolean(openAiApiKey && !codexApiKey),
           signal: request.signal,
         });
+      if (this.modelSettings.artifactContext) {
+        await preflightDeepScanWorkerSourceAccess({
+          codexPath,
+          cwd: request.workingDirectory,
+          configOverrides,
+          env: childEnv,
+          sourceReadRoots: this.modelSettings.artifactContext.sourceReadRoots,
+          pluginRoot: this.modelSettings.artifactContext.pluginRoot,
+          signal: request.signal,
+        });
+      }
       const prompt = await fs.readFile(request.promptPath, "utf8");
       const codex = new Codex({
         codexPathOverride: executablePathForSpawn(codexPath),
@@ -319,13 +338,25 @@ function workerSubagentConfig(
 type TomlValue = string | number | boolean | TomlObject;
 type TomlObject = { [key: string]: TomlValue };
 
-function workerPermissionProfile(sandbox: DeepWorkerParentSandbox): TomlObject {
+function workerPermissionProfile(
+  sandbox: DeepWorkerParentSandbox,
+  scan?: CodexSdkWorkerArtifactContext,
+): TomlObject {
+  if (scan?.sourceReadRootsError) {
+    throw new DeepScanNonRetryableError(scan.sourceReadRootsError);
+  }
+  const readOnlyRoots = scan
+    ? [...scan.sourceReadRoots, scan.pluginRoot]
+        .map((root) => workerReadOnlyRoot(sandbox, root))
+        .map((root) => workerReadOnlyPermission(root))
+    : [];
   return {
     extends: ":read-only",
     // Object.fromEntries preserves literal keys such as "__proto__" without
     // letting a denied path mutate the serializer object prototype.
     filesystem: Object.fromEntries([
       [":root", "read"],
+      ...readOnlyRoots,
       ...Array.from(sandbox.filesystemDenies, (key) => [key, "deny"]),
       ...(sandbox.globScanMaxDepth === undefined
         ? []
@@ -333,6 +364,371 @@ function workerPermissionProfile(sandbox: DeepWorkerParentSandbox): TomlObject {
     ]),
     network: { enabled: false },
   };
+}
+
+function workerReadOnlyRoot(
+  sandbox: DeepWorkerParentSandbox,
+  root: string,
+): string {
+  if (!isAbsolute(root)) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely add a relative source or plugin directory to the worker read-only profile.",
+    );
+  }
+  const normalized = resolve(root);
+  const deniedByParent = sandbox.filesystemDenies.some(
+    (denial) =>
+      !hasGlobMetacharacters(denial) && pathContains(denial, normalized),
+  );
+  if (deniedByParent) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely read a source or plugin directory denied by the parent filesystem policy.",
+    );
+  }
+  const grantedByParent =
+    sandbox.filesystemUnrestricted ||
+    sandbox.filesystemReadRoots.some((readRoot) =>
+      pathContains(readRoot, normalized),
+    );
+  if (!grantedByParent) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely read a source or plugin directory outside the parent filesystem grants.",
+    );
+  }
+  return normalized;
+}
+
+function hasGlobMetacharacters(value: string): boolean {
+  return /[*?\[\]]/u.test(value);
+}
+
+function pathContains(parent: string, candidate: string): boolean {
+  const paths = win32.isAbsolute(parent) ? win32 : posix;
+  const relativePath = paths.relative(
+    paths.resolve(parent),
+    paths.resolve(candidate),
+  );
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${paths.sep}`) &&
+      !paths.isAbsolute(relativePath))
+  );
+}
+
+function workerReadOnlyPermission(root: string): [string, TomlValue] {
+  let metadata: ReturnType<typeof statSync>;
+  try {
+    metadata = statSync(root);
+  } catch (error) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan cannot safely grant a read-only worker path that is no longer available.",
+      { cause: error },
+    );
+  }
+  if (!metadata.isDirectory()) return [root, { ".": "read" }];
+  if (hasGlobMetacharacters(root)) {
+    // Keep literal filesystem names out of Codex's glob parser; the probe
+    // below determines whether this exact path allows the needed reads.
+    return [root, { ".": "read" }];
+  }
+  const paths = win32.isAbsolute(root) ? win32 : posix;
+  const pathRoot = paths.parse(root).root;
+  const normalizedRoot = root.replace(/[\\/]+$/u, "");
+  const subtreeRoot =
+    normalizedRoot === pathRoot.replace(/[\\/]+$/u, "")
+      ? pathRoot
+      : normalizedRoot;
+  const separator = /[\\/]$/u.test(subtreeRoot) ? "" : "/";
+  // Use Codex's explicit trailing-/** form for selected directory subtrees.
+  return [`${subtreeRoot}${separator}**`, "read"];
+}
+
+interface DeepScanWorkerSourceAccessPreflightOptions {
+  readonly codexPath: string;
+  readonly cwd: string;
+  readonly configOverrides: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  readonly sourceReadRoots: readonly string[];
+  readonly pluginRoot: string;
+  readonly signal: AbortSignal;
+}
+
+const WORKER_SOURCE_ACCESS_PROBE_TIMEOUT_MS = 15_000;
+const WORKER_SOURCE_ACCESS_PROBE_MARKER = "codex-security-source-access-ok";
+const WORKER_SOURCE_ACCESS_PROBE_POWERSHELL = `
+$ErrorActionPreference = 'Stop'
+$roots = @($env:CODEX_SECURITY_SOURCE_PROBE_ROOTS | ConvertFrom-Json)
+$targetHasEntries = $false
+$targetFileRead = $false
+$lastTargetReadError = $null
+foreach ($root in $roots) {
+  $item = Get-Item -LiteralPath $root -Force
+  if ($item.PSIsContainer) {
+    $entries = @(Get-ChildItem -LiteralPath $root -Force)
+    if ($entries.Count -gt 0) { $targetHasEntries = $true }
+    $sample = Get-ChildItem -LiteralPath $root -File -Force -Recurse -ErrorAction SilentlyContinue |
+      Where-Object {
+        try {
+          $null = Get-Content -LiteralPath $_.FullName -TotalCount 1 -ErrorAction Stop
+          $true
+        } catch {
+          $lastTargetReadError = $_.Exception.Message
+          $false
+        }
+      } |
+      Select-Object -First 1
+    if ($sample) { $targetFileRead = $true }
+  } else {
+    $null = Get-Content -LiteralPath $root -TotalCount 1
+    $targetFileRead = $true
+  }
+}
+if ($targetHasEntries -and !$targetFileRead) {
+  if ($lastTargetReadError) { throw $lastTargetReadError }
+  throw 'No readable file was found under the selected source directory.'
+}
+$reference = $env:CODEX_SECURITY_SOURCE_PROBE_REFERENCE
+$referenceDirectory = [System.IO.Path]::GetDirectoryName($reference)
+$null = Get-ChildItem -LiteralPath $referenceDirectory -Force | Select-Object -First 1
+$null = Get-Content -LiteralPath $reference -TotalCount 1
+[Console]::Out.WriteLine('${WORKER_SOURCE_ACCESS_PROBE_MARKER}')
+`;
+const WORKER_SOURCE_ACCESS_PROBE = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const roots = JSON.parse(process.argv[1]);
+const reference = process.argv[2];
+function readOneByte(file) {
+  const descriptor = fs.openSync(file, "r");
+  try {
+    fs.readSync(descriptor, Buffer.alloc(1), 0, 1, 0);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+function firstReadableFile(root) {
+  const rootInfo = fs.lstatSync(root);
+  if (rootInfo.isFile()) {
+    readOneByte(root);
+    return true;
+  }
+  if (!rootInfo.isDirectory()) return false;
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.shift();
+    let names;
+    try {
+      names = fs.readdirSync(directory).sort();
+    } catch {
+      continue;
+    }
+    const children = [];
+    for (const name of names) {
+      const candidate = path.join(directory, name);
+      let metadata;
+      try {
+        metadata = fs.lstatSync(candidate);
+      } catch {
+        continue;
+      }
+      if (metadata.isFile()) {
+        try {
+          readOneByte(candidate);
+          return true;
+        } catch (error) {
+          lastTargetReadError = error;
+          continue;
+        }
+      }
+      if (metadata.isDirectory()) children.push(candidate);
+    }
+    pending.push(...children);
+  }
+  return false;
+}
+let targetHasEntries = false;
+let targetFileRead = false;
+let lastTargetReadError;
+for (const root of roots) {
+  const metadata = fs.lstatSync(root);
+  if (metadata.isDirectory()) {
+    if (fs.readdirSync(root).length > 0) targetHasEntries = true;
+    if (firstReadableFile(root)) targetFileRead = true;
+  } else if (metadata.isFile()) {
+    readOneByte(root);
+    targetFileRead = true;
+  }
+}
+if (targetHasEntries && !targetFileRead) {
+  throw lastTargetReadError || new Error("No readable file was found under the selected source directory.");
+}
+fs.readdirSync(path.dirname(reference));
+readOneByte(reference);
+process.stdout.write("${WORKER_SOURCE_ACCESS_PROBE_MARKER}\n");
+`;
+
+async function preflightDeepScanWorkerSourceAccess(
+  options: DeepScanWorkerSourceAccessPreflightOptions,
+): Promise<void> {
+  // Run the same Codex sandbox profile against real file reads before any
+  // model thread starts, so a policy denial cannot consume worker tokens.
+  if (options.signal.aborted) throw abortError(options.signal.reason);
+  const reference = join(options.pluginRoot, "references", "core-bug-scan.md");
+  const args = options.configOverrides.flatMap((override) => [
+    "--config",
+    override,
+  ]);
+  const probeEnvironment = { ...options.env };
+  const systemRoot = environmentVariable(
+    probeEnvironment,
+    "SystemRoot",
+    process.platform,
+  );
+  const probeCommand =
+    process.platform === "win32"
+      ? [
+          systemRoot
+            ? join(
+                systemRoot,
+                "System32",
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe",
+              )
+            : "powershell.exe",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          WORKER_SOURCE_ACCESS_PROBE_POWERSHELL,
+        ]
+      : [
+          process.execPath,
+          "-e",
+          WORKER_SOURCE_ACCESS_PROBE,
+          JSON.stringify(options.sourceReadRoots),
+          join(options.pluginRoot, "references", "core-bug-scan.md"),
+        ];
+  if (process.platform === "win32") {
+    probeEnvironment.CODEX_SECURITY_SOURCE_PROBE_ROOTS = JSON.stringify(
+      options.sourceReadRoots,
+    );
+    probeEnvironment.CODEX_SECURITY_SOURCE_PROBE_REFERENCE = join(
+      options.pluginRoot,
+      "references",
+      "core-bug-scan.md",
+    );
+  }
+  args.push(
+    "sandbox",
+    "--permission-profile",
+    DEEP_SCAN_WORKER_PERMISSION_PROFILE_ID,
+    "--include-managed-config",
+    "--cd",
+    options.cwd,
+    "--",
+    ...probeCommand,
+  );
+  let child: ChildProcess;
+  try {
+    child = spawn(executablePathForSpawn(options.codexPath), args, {
+      cwd: options.cwd,
+      env: probeEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new DeepScanNonRetryableError(
+      "Deep Scan could not start the Codex sandbox access probe before starting a model worker: " +
+        (error instanceof Error ? error.message : String(error)),
+      { cause: error },
+    );
+  }
+  await awaitWorkerSourceAccessProbe(child, options);
+}
+
+function awaitWorkerSourceAccessProbe(
+  child: ChildProcess,
+  options: DeepScanWorkerSourceAccessPreflightOptions,
+): Promise<void> {
+  const stdoutStream = child.stdout;
+  const stderrStream = child.stderr;
+  if (!stdoutStream || !stderrStream) {
+    child.kill();
+    return Promise.reject(
+      new DeepScanNonRetryableError(
+        "Deep Scan could not capture the Codex sandbox access probe result before starting a model worker.",
+      ),
+    );
+  }
+  return new Promise((resolveProbe, rejectProbe) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      options.signal.removeEventListener("abort", onAbort);
+      if (error) rejectProbe(error);
+      else resolveProbe();
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      settle(
+        new DeepScanNonRetryableError(
+          "Deep Scan could not verify read-only access to the selected source and bug-scan reference before starting a model worker because the Codex sandbox access probe timed out.",
+        ),
+      );
+    }, WORKER_SOURCE_ACCESS_PROBE_TIMEOUT_MS);
+    stdoutStream.setEncoding("utf8");
+    stderrStream.setEncoding("utf8");
+    stdoutStream.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    stderrStream.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const onAbort = () => {
+      child.kill();
+      settle(abortError(options.signal.reason));
+    };
+    options.signal.addEventListener("abort", onAbort, { once: true });
+    if (options.signal.aborted) onAbort();
+    child.once("error", (error) => {
+      settle(
+        new DeepScanNonRetryableError(
+          `Deep Scan could not start the Codex sandbox access probe before starting a model worker: ${error.message}`,
+          { cause: error },
+        ),
+      );
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      if (
+        code === 0 &&
+        stdout.split(/\r?\n/u).includes(WORKER_SOURCE_ACCESS_PROBE_MARKER)
+      ) {
+        settle();
+        return;
+      }
+      const termination =
+        code === null
+          ? signal
+            ? `signal ${signal}`
+            : "unknown termination"
+          : `exit code ${code}`;
+      const diagnostics = [stdout.trim(), stderr.trim()]
+        .filter((value) => value.length > 0)
+        .join("\n");
+      settle(
+        new DeepScanNonRetryableError(
+          "Deep Scan could not verify read-only access to the selected source and bug-scan reference before starting a model worker. The Codex sandbox access probe returned " +
+            termination +
+            (diagnostics ? `:\n${diagnostics}` : "."),
+        ),
+      );
+    });
+  });
 }
 
 function workerPermissionProfileConfigOverrides(profile: TomlObject): string[] {

@@ -16,7 +16,6 @@ import {
   loadArtifactZodSchema,
   type SchemaDocument,
 } from "./artifact-schema-loader.js";
-import { saveThreatModelDocument } from "./threat-model-document.js";
 import {
   createDeepScanArtifacts,
   readJsonObject,
@@ -71,15 +70,15 @@ export async function getCodexSecurityDeepReducerInputs(
         );
         const result = parseStoredScanDraft(
           await readJsonObject(worker.resultPath),
-          "Accepted Standard worker " + worker.id,
+          "Accepted discovery worker " + worker.id,
           bound.scanId,
           parsePersistedScanDraft,
-          " has an invalid Standard scan result: ",
+          " has an invalid bug-scan result: ",
           " belongs to a different scan.",
         );
         if (result.complete === false)
           throw new Error(
-            "An assigned Standard worker wrote only a checkpoint, not a complete result.",
+            "An assigned discovery worker wrote only a checkpoint, not a complete result.",
           );
         result.findings = result.findings.map((finding, index) => ({
           ...finding,
@@ -88,8 +87,18 @@ export async function getCodexSecurityDeepReducerInputs(
             sourceFindingIds: [`${worker.id}:${index}`],
           },
         }));
+        const scanCoverage = structuredClone(result.coverage);
+        scanCoverage.surfaces = (
+          scanCoverage.surfaces as Record<string, unknown>[]
+        ).map((surface) => ({ ...surface, sourceWorkerIds: [worker.id] }));
+        scanCoverage.deferred = (
+          scanCoverage.deferred as Record<string, unknown>[]
+        ).map((candidate) => ({ ...candidate, sourceWorkerIds: [worker.id] }));
         const { coverage: _coverage, ...reduction } = result;
-        return { workerId: worker.id, result: reduction };
+        return {
+          workerId: worker.id,
+          result: { ...reduction, scanCoverage },
+        };
       }),
     );
     const previous = await readPreviousReduction(bound);
@@ -98,7 +107,7 @@ export async function getCodexSecurityDeepReducerInputs(
     for (const discovery of discoveries) {
       if (discovery.result.scanId !== scanId) {
         throw new Error(
-          "Accepted Standard worker " +
+          "Accepted discovery worker " +
             discovery.workerId +
             " belongs to a different scan.",
         );
@@ -132,7 +141,7 @@ export async function recordCodexSecurityDeepReduction(
       inputs.discoveries[0]?.result.scanId;
     if (reduction.scanId !== expectedScanId) {
       throw new Error(
-        "Deep reduction scanId does not match its assigned Standard results.",
+        "Deep reduction scanId does not match its assigned functional bug results.",
       );
     }
     reduction = reconcileDeepReduction(
@@ -143,14 +152,9 @@ export async function recordCodexSecurityDeepReduction(
 
     await saveScanDraftCheckpoint(context, reduction);
     await writeJsonAtomic(bound.resultPath, reduction);
-    const documentWarning = await saveThreatModelDocument(
-      context,
-      reduction.threatModel,
-    );
     return {
       findingCount: reduction.findings.length,
       consumedWorkerIds: bound.state.claimedWorkers.map((worker) => worker.id),
-      ...(documentWarning === undefined ? {} : { warnings: [documentWarning] }),
     };
   });
 }
@@ -165,19 +169,19 @@ function bindDeepReducer(context: ArtifactContext): BoundReducer {
   }
   if (state.claimedWorkers.length === 0) {
     throw new Error(
-      "The active Deep reducer has no assigned Standard scan workers.",
+      "The active Deep reducer has no assigned discovery workers.",
     );
   }
   const workerIds = new Set<string>();
   for (const worker of state.claimedWorkers) {
     if (!worker.id.trim()) {
       throw new Error(
-        "An assigned Standard scan worker has no worker identity.",
+        "An assigned discovery worker has no worker identity.",
       );
     }
     if (workerIds.has(worker.id)) {
       throw new Error(
-        "The active Deep reducer repeats assigned Standard scan worker " +
+        "The active Deep reducer repeats assigned discovery worker " +
           worker.id +
           ".",
       );
@@ -207,7 +211,7 @@ async function readPreviousReduction(
     "The previous accepted Deep reduction",
     bound.scanId,
     (value) => parseDeepReduction(value, true),
-    " has an invalid Standard scan result: ",
+    " has an invalid bug-scan result: ",
     " belongs to a different scan.",
   );
 }

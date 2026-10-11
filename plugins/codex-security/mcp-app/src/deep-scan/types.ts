@@ -37,6 +37,7 @@ export interface DeepScanRunState {
   updatedAt?: string;
   targetPath: string;
   scope: string;
+  sourceReadPaths: string[];
   userContext?: string;
   scanDir: string;
   config: DeepScanConfig;
@@ -115,6 +116,7 @@ export type DeepScanStore = Omit<
 export interface CodexWorkerArtifactContext {
   root: string;
   layout: "worker" | "reducer";
+  mode?: string;
   deepReducer?: DeepReducerContext;
 }
 

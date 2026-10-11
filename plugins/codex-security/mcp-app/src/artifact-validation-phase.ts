@@ -72,6 +72,11 @@ export async function recordCodexSecurityCandidateValidations(
   operation: "replace";
   rowsWritten: number;
 }> {
+  if (context.mode === "deep") {
+    throw new Error(
+      "Security candidate validation is unavailable during functional bug scans.",
+    );
+  }
   if (context.layout !== "scan") {
     throw new Error(
       "Candidate validation requires a scan-bound artifact context.",

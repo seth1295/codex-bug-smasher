@@ -1,6 +1,6 @@
 # Scan Prologue
 
-Apply this guidance once when a Standard or Deep Security Scan owns the top-level workflow. An independent worker inherits its assigned scan context and must not repeat top-level setup, scan ownership, or completed phases.
+Apply this guidance once when a Standard security scan owns the top-level workflow. An independent worker inherits its assigned scan context and must not repeat top-level setup, scan ownership, or completed phases.
 
 ## Setup and Scan Ownership
 

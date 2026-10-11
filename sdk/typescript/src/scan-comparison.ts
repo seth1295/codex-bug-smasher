@@ -136,6 +136,8 @@ interface ReadOnlyCodex {
 }
 
 export interface ReadOnlyCodexOptions {
+  /** Scan mode controls the model default for scan-related helper turns. */
+  mode?: "standard" | "deep";
   /** @internal Authentication already selected by the calling scan. */
   auth?: ScanAuthMode;
   /** @internal Cyber access program already selected by the calling scan. */
@@ -517,7 +519,7 @@ async function startReadOnlyCodexThread(
   const config =
     options.config === undefined
       ? undefined
-      : await mergedCodexConfig(options.config);
+      : await mergedCodexConfig(options.config, { mode: options.mode });
   const configuredModel =
     config === undefined ? undefined : scanModelConfiguration(config);
   const model = options.model ?? configuredModel?.model;

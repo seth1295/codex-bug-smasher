@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "functional-bug://schemas/scan-manifest.schema.json",
+  "title": "Functional bug scan manifest",
+  "type": "object",
+  "required": ["documentType", "schemaVersion", "scan"],
+  "properties": {
+    "documentType": {"const": "functional-bug-scan.scan-manifest"},
+    "schemaVersion": {"const": "1.0"},
+    "scan": {
+      "type": "object",
+      "required": ["id", "producer", "status", "startedAt", "completedAt", "sealedAt", "reviewType", "target", "scope", "coverageRef", "findingsRef", "artifacts"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "producer": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": {"const": "functional-bug-scan-plugin"},
+            "version": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": true
+        },
+        "status": {"enum": ["completed", "failed", "canceled", "interrupted"]},
+        "startedAt": {"type": "string", "format": "date-time"},
+        "completedAt": {"type": "string", "format": "date-time"},
+        "sealedAt": {"type": "string", "format": "date-time"},
+        "reviewType": {"const": "functional_bug"},
+        "threatModel": false,
+        "hardening": false,
+        "target": {
+          "type": "object",
+          "required": ["kind", "targetId", "displayName"],
+          "properties": {
+            "kind": {"enum": ["git_revision", "git_worktree", "git_diff", "directory_snapshot"]},
+            "targetId": {"type": "string", "minLength": 1},
+            "displayName": {"type": "string", "minLength": 1},
+            "remote": {"type": "string"},
+            "revision": {"type": "string"},
+            "baseRevision": {"type": "string"},
+            "headRevision": {"type": "string"},
+            "snapshotDigest": {"type": "string"}
+          },
+          "additionalProperties": true
+        },
+        "scope": {
+          "type": "object",
+          "required": ["includePaths", "excludePaths"],
+          "properties": {
+            "includePaths": {"type": "array", "items": {"type": "string"}},
+            "excludePaths": {"type": "array", "items": {"type": "string"}},
+            "summary": {"type": "string"},
+            "artifactsReviewed": {"type": "array", "items": {"type": "string"}},
+            "runtimeStatus": {"type": "string"},
+            "validationMode": {"type": "string"},
+            "context": {"type": "string"},
+            "limitations": {"type": "array", "items": {"type": "string"}}
+          },
+          "additionalProperties": true
+        },
+        "coverageRef": {"const": "coverage.json"},
+        "findingsRef": {"const": "findings.json"},
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256", "mediaType"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "mediaType": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

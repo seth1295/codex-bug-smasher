@@ -193,7 +193,7 @@ export async function startOrJoinDeepScanCoordinator(input: {
   const threadId = input.options.threadId;
   if (!threadId) {
     throw new Error(
-      "Starting or joining a Deep Scan requires its owning Codex thread.",
+      "Starting or joining a Deep Bug Scan requires its owning Codex thread.",
     );
   }
   const claim = await input.options.store.claimCoordinator({

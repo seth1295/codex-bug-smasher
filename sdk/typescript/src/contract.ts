@@ -14,6 +14,9 @@ import { ContractValidationError, abortReason } from "./errors.js";
 import { isRecord } from "./record.js";
 import type {
   ContractObject as JsonRecord,
+  BugCoverageDocument,
+  BugFindingsDocument,
+  BugScanManifest,
   CoverageDocument,
   FindingsDocument,
   ScanManifest,
@@ -31,7 +34,13 @@ const DOCUMENTS = {
   "findings.json": "findings.schema.json",
   "coverage.json": "coverage.schema.json",
 } as const;
+const FUNCTIONAL_BUG_DOCUMENTS = {
+  "scan-manifest.json": "bug-scan-manifest.schema.json",
+  "findings.json": "bug-findings.schema.json",
+  "coverage.json": "bug-coverage.schema.json",
+} as const;
 const PRODUCER_NAME = "codex-security-plugin";
+const BUG_PRODUCER_NAME = "functional-bug-scan-plugin";
 const SAFE_SCHEMA_ERROR_PROPERTIES = new Set([
   "scan",
   "target",
@@ -66,6 +75,9 @@ export interface LoadedContract {
   manifest: ScanManifest;
   findings: FindingsDocument;
   coverage: CoverageDocument;
+  bugManifest?: BugScanManifest;
+  bugFindings?: BugFindingsDocument;
+  bugCoverage?: BugCoverageDocument;
 }
 
 type LoadContractOptions = {
@@ -115,9 +127,15 @@ export async function loadContractWithScanDirectory(
   };
   throwIfAborted(options.signal);
   let findingsPayload: unknown = payloads["findings.json"];
+  const manifestShape = payloads["scan-manifest.json"] as {
+    scan?: { reviewType?: unknown };
+  };
+  const isFunctionalBugScan =
+    manifestShape.scan?.reviewType === "functional_bug";
+  const documents = isFunctionalBugScan ? FUNCTIONAL_BUG_DOCUMENTS : DOCUMENTS;
 
   const ajv = createValidator();
-  for (const [filename, schemaName] of Object.entries(DOCUMENTS)) {
+  for (const [filename, schemaName] of Object.entries(documents)) {
     const schema = await readJson(
       join(options.pluginRoot, "schemas", schemaName),
       options.signal,
@@ -139,7 +157,7 @@ export async function loadContractWithScanDirectory(
         return result;
       };
       valid = validatePayload(payload);
-      if (!valid && filename === "findings.json") {
+      if (!valid && filename === "findings.json" && !isFunctionalBugScan) {
         payload = normalizePersistedFindings(payload);
         valid = validatePayload(payload);
       }
@@ -152,6 +170,91 @@ export async function loadContractWithScanDirectory(
     if (filename === "findings.json") findingsPayload = payload;
     throwIfAborted(options.signal);
   }
+  if (isFunctionalBugScan) {
+    const bugManifest = payloads[
+      "scan-manifest.json"
+    ] as unknown as BugScanManifest;
+    const bugFindings = findingsPayload as BugFindingsDocument;
+    const bugCoverage = payloads[
+      "coverage.json"
+    ] as unknown as BugCoverageDocument;
+    if (
+      options.expectedScanId !== undefined &&
+      bugManifest.scan.id !== options.expectedScanId
+    ) {
+      throw new ContractValidationError(
+        `Scan artifacts do not match selected scan ${options.expectedScanId}.`,
+      );
+    }
+    if (
+      bugFindings.scanId !== bugManifest.scan.id ||
+      bugCoverage.scanId !== bugManifest.scan.id
+    ) {
+      throw new ContractValidationError(
+        "Canonical functional bug artifact scan IDs do not match.",
+      );
+    }
+    if (
+      !sameArray(
+        bugCoverage.includePaths,
+        bugManifest.scan.scope.includePaths,
+      ) ||
+      !sameArray(bugCoverage.excludePaths, bugManifest.scan.scope.excludePaths)
+    ) {
+      throw new ContractValidationError(
+        "Functional bug coverage paths do not match the manifest scope.",
+      );
+    }
+    validateCanonicalBugContract(bugManifest, bugFindings, bugCoverage);
+    await validateSeal(
+      scanDir,
+      bugManifest as unknown as ScanManifest,
+      bugFindings as unknown as FindingsDocument,
+      bugCoverage as unknown as CoverageDocument,
+      documentDigests,
+      options.signal,
+      scanRoot,
+    );
+    if (options.expectation !== undefined) {
+      validateExpectation(
+        bugManifest as unknown as ScanManifest,
+        bugCoverage as unknown as CoverageDocument,
+        options.expectation,
+        options.workbenchValidated === true,
+      );
+    }
+    await verifyScanRoot(scanRoot, options.signal);
+    return {
+      contract: {
+        manifest: bugManifest as unknown as ScanManifest,
+        findings: {
+          documentType: "codex-security.findings",
+          schemaVersion: "1.0",
+          scanId: bugFindings.scanId,
+          findings: [],
+        },
+        coverage: {
+          documentType: "codex-security.coverage",
+          schemaVersion: "1.0",
+          scanId: bugCoverage.scanId,
+          mode: bugCoverage.mode as CoverageDocument["mode"],
+          completeness: bugCoverage.completeness,
+          inventoryStrategy:
+            bugCoverage.inventoryStrategy as CoverageDocument["inventoryStrategy"],
+          includePaths: bugCoverage.includePaths,
+          excludePaths: bugCoverage.excludePaths,
+          surfaces: [],
+          explicitExclusions: bugCoverage.explicitExclusions,
+          deferred: [],
+        },
+        bugManifest,
+        bugFindings,
+        bugCoverage,
+      },
+      scanDirectory: scanRoot.path,
+    };
+  }
+
   const manifest = payloads["scan-manifest.json"] as unknown as ScanManifest;
   const findings = findingsPayload as FindingsDocument;
   const coverage = payloads["coverage.json"] as unknown as CoverageDocument;
@@ -508,6 +611,118 @@ function validateCanonicalContract(
   }
 }
 
+function validateCanonicalBugContract(
+  manifest: BugScanManifest,
+  findings: BugFindingsDocument,
+  coverage: BugCoverageDocument,
+): void {
+  if (manifest.scan.reviewType !== "functional_bug") {
+    throw new ContractValidationError(
+      "Functional bug findings require a functional bug scan manifest.",
+    );
+  }
+  const findingIds = new Set<string>();
+  const occurrenceIds = new Set<string>();
+  for (const [index, finding] of findings.findings.entries()) {
+    const context = `findings.findings[${index}]`;
+    if (findingIds.has(finding.findingId)) {
+      throw new ContractValidationError(`${context}: duplicate bug id.`);
+    }
+    if (occurrenceIds.has(finding.occurrenceId)) {
+      throw new ContractValidationError(
+        `${context}: duplicate bug occurrence.`,
+      );
+    }
+    findingIds.add(finding.findingId);
+    occurrenceIds.add(finding.occurrenceId);
+    for (const [field, value] of [
+      ["title", finding.title],
+      ["summary", finding.summary],
+      ["category", finding.category],
+      ["expected", finding.expected],
+      ["actual", finding.actual],
+      ["impact", finding.impact],
+      ["confidence.rationale", finding.confidence.rationale],
+      ["provenance.source", finding.provenance.source],
+      ["validation.method", finding.validation.method],
+      ...finding.validation.evidence.map((item, evidenceIndex) => [
+        `validation.evidence[${evidenceIndex}]`,
+        item,
+      ]),
+    ] as const) {
+      if (/^[\p{White_Space}\u001c-\u001f]*$/u.test(value ?? "")) {
+        throw new ContractValidationError(
+          `${context}.${field}: expected a non-empty string.`,
+        );
+      }
+    }
+    if (finding.validation.status !== "validated") {
+      throw new ContractValidationError(
+        `${context}.validation.status: only validated bugs belong in findings.`,
+      );
+    }
+    for (const [locationIndex, location] of finding.locations.entries()) {
+      const locationContext = `${context}.locations[${locationIndex}]`;
+      try {
+        safeRelativePath(location.path, `${locationContext}.path`);
+      } catch (error) {
+        throw new ContractValidationError(
+          `${locationContext}.path: expected a safe repository-relative POSIX path.`,
+          { cause: error },
+        );
+      }
+      if ((location.endLine ?? location.startLine) < location.startLine) {
+        throw new ContractValidationError(
+          `${locationContext}.endLine: expected an integer >= startLine.`,
+        );
+      }
+    }
+    const fingerprint = `functional-bug/v1:sha256:${hash(
+      "sha256",
+      [
+        "functional-bug/v1",
+        manifest.scan.target.targetId,
+        finding.ruleId,
+        finding.identity.anchor,
+        finding.identity.instance ?? "",
+      ].join("\0"),
+    )}`;
+    const findingId = `bug_${hash("sha256", fingerprint).slice(0, 24)}`;
+    const occurrenceId = `occ_${hash(
+      "sha256",
+      [manifest.scan.id, fingerprint].join("\0"),
+    ).slice(0, 24)}`;
+    if (finding.findingId !== findingId) {
+      throw new ContractValidationError(
+        `${context}.findingId: does not match derived bug identity.`,
+      );
+    }
+    if (finding.occurrenceId !== occurrenceId) {
+      throw new ContractValidationError(
+        `${context}.occurrenceId: does not match scan occurrence identity.`,
+      );
+    }
+    if (
+      finding.fingerprints.algorithm !== "functional-bug/v1" ||
+      finding.fingerprints.primary !== fingerprint
+    ) {
+      throw new ContractValidationError(
+        `${context}.fingerprints: does not match derived bug identity.`,
+      );
+    }
+  }
+  const expectedHypotheses = coverage.deferred.filter(
+    (item) => "candidate" in item || "finding" in item || "hypothesis" in item,
+  );
+  if (
+    JSON.stringify(findings.hypotheses) !== JSON.stringify(expectedHypotheses)
+  ) {
+    throw new ContractValidationError(
+      "findings.hypotheses: must match unresolved candidates in coverage.deferred.",
+    );
+  }
+}
+
 export async function requireScanFile(
   scanDirectory: string,
   relativePath: string,
@@ -646,19 +861,24 @@ async function validateSeal(
     }
   }
 
-  for (const surface of coverage.surfaces) {
-    for (const receipt of surface.receiptRefs) {
-      throwIfAborted(signal);
-      const normalized = portableRelativePath(receipt, "coverage receipt");
-      if (!normalized.startsWith("artifacts/")) {
-        throw new ContractValidationError(
-          `Coverage receipt must be under artifacts/: ${receipt}`,
-        );
-      }
-      if (!artifactPaths.has(normalized)) {
-        throw new ContractValidationError(
-          `Coverage receipt is missing from sealed artifacts: ${receipt}`,
-        );
+  const isFunctionalBugScan =
+    (manifest as unknown as { documentType?: unknown }).documentType ===
+    "functional-bug-scan.scan-manifest";
+  if (!isFunctionalBugScan) {
+    for (const surface of coverage.surfaces) {
+      for (const receipt of surface.receiptRefs) {
+        throwIfAborted(signal);
+        const normalized = portableRelativePath(receipt, "coverage receipt");
+        if (!normalized.startsWith("artifacts/")) {
+          throw new ContractValidationError(
+            `Coverage receipt must be under artifacts/: ${receipt}`,
+          );
+        }
+        if (!artifactPaths.has(normalized)) {
+          throw new ContractValidationError(
+            `Coverage receipt is missing from sealed artifacts: ${receipt}`,
+          );
+        }
       }
     }
   }
@@ -695,9 +915,14 @@ function validateExpectation(
   workbenchValidated = false,
 ): void {
   const scan = manifest.scan;
-  if (scan.producer.name !== PRODUCER_NAME) {
+  const expectedProducer =
+    (manifest as unknown as { documentType?: string }).documentType ===
+    "functional-bug-scan.scan-manifest"
+      ? BUG_PRODUCER_NAME
+      : PRODUCER_NAME;
+  if (scan.producer.name !== expectedProducer) {
     throw new ContractValidationError(
-      `Manifest producer must be ${PRODUCER_NAME}, got ${scan.producer.name}.`,
+      `Manifest producer must be ${expectedProducer}, got ${scan.producer.name}.`,
     );
   }
   if (scan.producer.version !== expectation.pluginVersion) {

@@ -34,6 +34,9 @@ export function updateCommand(
 ): string {
   const path = entrypoint.replaceAll("\\", "/").toLowerCase();
   const agent = (environment["npm_config_user_agent"] ?? "").toLowerCase();
+  if (!isInstalledPackagePath(path)) {
+    return "update the source checkout and rebuild the CLI";
+  }
 
   if (
     environment["npm_command"] === "exec" ||
@@ -90,6 +93,9 @@ export async function checkForUpdate({
   signal?: AbortSignal;
 } = {}): Promise<UpdateNotice | undefined> {
   if (!updateNoticeEnabled(environment)) return undefined;
+  if (entrypoint !== undefined && !isInstalledPackagePath(entrypoint)) {
+    return undefined;
+  }
 
   try {
     const registry =
@@ -129,6 +135,19 @@ export async function checkForUpdate({
   } catch {
     return undefined;
   }
+}
+
+function isInstalledPackagePath(entrypoint: string): boolean {
+  const path = entrypoint.replaceAll("\\", "/").toLowerCase();
+  return [
+    "/node_modules/",
+    "/_npx/",
+    "/.pnpm/",
+    "/pnpm/global/",
+    "/.bun/install/",
+    "/.yarn/",
+    "/yarn/global/",
+  ].some((marker) => path.includes(marker));
 }
 
 export function formatUpdateNotice(notice: UpdateNotice): string {

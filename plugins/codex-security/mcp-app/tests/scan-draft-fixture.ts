@@ -6,6 +6,7 @@ export function workerDraft<Finding extends Record<string, unknown>>(
 ) {
   return {
     scanId,
+    reviewType: "functional_bug",
     findings,
     coverage: {
       completeness: "complete",
@@ -19,18 +20,29 @@ export function workerDraft<Finding extends Record<string, unknown>>(
 
 export function finding(id: string, repositoryPath: string) {
   return {
-    ruleId: "cross-site-scripting." + id,
+    ruleId: "incorrect-result." + id,
     identity: { anchor: id },
-    title: "Unsafe request output " + id,
-    summary: "A request-controlled value reaches an HTML response.",
-    severity: { level: "high" },
+    title: "Incorrect result " + id,
+    summary: "The implementation returns a value that differs from its contract.",
+    priority: "P2",
+    category: "algorithm",
     confidence: {
       level: "high",
-      rationale: "The source establishes reachability.",
+      rationale: "A focused reproduction returns the wrong result.",
     },
-    taxonomy: { category: "cross-site-scripting", cwe: ["CWE-79"] },
     locations: [{ path: repositoryPath, startLine: 1, endLine: 2 }],
-    remediation: "Encode request-controlled values before emitting HTML.",
+    expected: "The function returns the documented result for the input.",
+    actual: "The function returns an incorrect value.",
+    impact: "The caller receives incorrect data.",
+    validation: {
+      status: "validated",
+      method: "Focused deterministic reproduction.",
+      evidence: ["The fixture input produced an incorrect result."],
+      reproduction: ["Call the function with the fixture input."],
+      counterEvidence: ["The safe implementation returns the expected result."],
+    },
+    suggestedCorrection: "Correct the operation at the source location.",
+    tests: ["Add a regression test for this input."],
     provenance: { source: "local_plugin" },
   };
 }

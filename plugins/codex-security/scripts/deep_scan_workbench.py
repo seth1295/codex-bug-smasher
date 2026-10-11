@@ -21,7 +21,12 @@ from finalize_scan_contract import _read_scan_local_json
 from workbench.handoff import require_current_continuation
 from workbench.storage import create_private_directory
 from workbench_target import directory_snapshot_regular_file_count
-from workbench_validation import optional_text, require_uuid, user_context_argument
+from workbench_validation import (
+    optional_text,
+    reject_non_finite_json,
+    require_uuid,
+    user_context_argument,
+)
 
 DEEP_SCAN_WORKER_KINDS = ("setup", "discovery", "dedup")
 DEEP_SCAN_WORKER_STATUSES = ("queued", "running", "succeeded", "failed", "canceled")
@@ -31,7 +36,7 @@ DEEP_SCAN_REPLACEABLE_FAILURE_KINDS = (
     "invalid_discovery_artifacts",
 )
 DEEP_SCAN_TERMINAL_REASONS = ("saturated", "capped")
-DEEP_SCAN_WORKFLOW_VERSION = "deep-security-scan/v1"
+DEEP_SCAN_WORKFLOW_VERSION = "deep-bug-scan/v1"
 DEEP_SCAN_COORDINATOR_LEASE_SECONDS = 30
 DEEP_SCAN_LEGACY_COORDINATOR_GRACE_SECONDS = 120
 DEEP_SCAN_MAX_ERROR_LENGTH = 2400
@@ -328,6 +333,33 @@ def canonical_discovery_artifacts(scan: sqlite3.Row) -> dict[str, str]:
     }
 
 
+def deep_scan_source_read_paths(scan: sqlite3.Row) -> list[str]:
+    recipe_json = scan["recipe_json"] if "recipe_json" in scan.keys() else None
+    if recipe_json is not None:
+        try:
+            recipe = json.loads(recipe_json, parse_constant=reject_non_finite_json)
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("Deep Scan source scope is invalid.") from exc
+        target = recipe.get("target") if isinstance(recipe, dict) else None
+        if isinstance(target, dict):
+            kind = target.get("kind")
+            paths = target.get("paths")
+            if kind == "repository":
+                return ["."]
+            if kind == "paths":
+                if (
+                    not isinstance(paths, list)
+                    or not paths
+                    or not all(isinstance(path, str) for path in paths)
+                ):
+                    raise SystemExit("Deep Scan source scope is invalid.")
+                return paths
+    scope = scan["scope"]
+    if not isinstance(scope, str) or not scope:
+        raise SystemExit("Deep Scan source scope is invalid.")
+    return [scope]
+
+
 def deep_scan_state(connection: sqlite3.Connection, scan_id: str) -> dict[str, Any]:
     run = require_deep_scan_run(connection, scan_id)
     scan = dependencies().require_scan(connection, run["scan_id"])
@@ -372,6 +404,7 @@ def deep_scan_state(connection: sqlite3.Connection, scan_id: str) -> dict[str, A
         "scanId": run["scan_id"],
         "targetPath": scan["target_path"],
         "scope": scan["scope"],
+        "sourceReadPaths": deep_scan_source_read_paths(scan),
         "userContext": scan["user_context"],
         "scanDir": scan["scan_dir"],
         "schemaVersion": run["schema_version"],

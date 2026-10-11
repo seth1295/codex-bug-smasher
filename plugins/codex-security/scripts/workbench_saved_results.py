@@ -62,6 +62,31 @@ _RESERVED_ARTIFACT_PATHS = json.loads(
 )
 
 
+def sealed_bug_findings(db: Any, connection: Any, scan: Any) -> dict[str, Any] | None:
+    if (
+        scan["mode"] != "deep"
+        or scan["status"] not in {"complete", "failed"}
+        or scan["seal_manifest_digest"] is None
+    ):
+        return None
+    artifact = connection.execute(
+        "SELECT path FROM scan_artifacts WHERE scan_id = ? AND kind = 'manifest'",
+        (scan["id"],),
+    ).fetchone()
+    if artifact is None:
+        return None
+    scan_dir = Path(scan["scan_dir"])
+    manifest_path = db.available_artifact_path(scan_dir, Path(artifact["path"]))
+    if manifest_path is None:
+        return None
+    saved_scan = db.read_json_object(manifest_path).get("scan")
+    if not isinstance(saved_scan, dict) or saved_scan.get("reviewType") != "functional_bug":
+        return None
+    manifest, findings, _, _ = db._read_sealed_scan(scan_dir, None, "saved bug scan")
+    db.verify_manifest_binding(scan, manifest)
+    return findings
+
+
 def threat_model_fields(db: Any, scan: sqlite3.Row) -> dict[str, Any]:
     scan_dir = Path(scan["scan_dir"])
     fields: dict[str, Any] = {"threatModelAvailable": False}
@@ -343,7 +368,7 @@ def _parent_scan_draft(
         "coverage": coverage,
         **{
             key: parent_scan[key]
-            for key in ("scope", "threatModel", "complete")
+            for key in ("scope", "threatModel", "complete", "reviewType")
             if key in parent_scan
         },
     }
@@ -2142,19 +2167,24 @@ def preserve_scan_results_locked(
                     "(scan_id, kind, path, created_at) VALUES (?, ?, ?, ?)",
                     (scan_id, kind, str(path), scan["completed_at"]),
                 )
-            # Delete only vanished occurrences; stable IDs retain triage and remediation.
-            existing_ids = {
-                row["id"]
-                for row in connection.execute(
-                    "SELECT id FROM finding_occurrences WHERE scan_id = ?", (scan_id,)
+            if manifest["scan"].get("reviewType") == "functional_bug":
+                connection.execute(
+                    "DELETE FROM finding_occurrences WHERE scan_id = ?", (scan_id,)
                 )
-            }
-            retained_ids = {finding["occurrenceId"] for finding in findings["findings"]}
-            connection.executemany(
-                "DELETE FROM finding_occurrences WHERE id = ? AND scan_id = ?",
-                ((occurrence_id, scan_id) for occurrence_id in existing_ids - retained_ids),
-            )
-            db.index_findings(connection, scan_id, findings, scan["completed_at"])
+            else:
+                # Delete only vanished occurrences; stable IDs retain triage and remediation.
+                existing_ids = {
+                    row["id"]
+                    for row in connection.execute(
+                        "SELECT id FROM finding_occurrences WHERE scan_id = ?", (scan_id,)
+                    )
+                }
+                retained_ids = {finding["occurrenceId"] for finding in findings["findings"]}
+                connection.executemany(
+                    "DELETE FROM finding_occurrences WHERE id = ? AND scan_id = ?",
+                    ((occurrence_id, scan_id) for occurrence_id in existing_ids - retained_ids),
+                )
+                db.index_findings(connection, scan_id, findings, scan["completed_at"])
             connection.execute(
                 "UPDATE scans SET seal_manifest_digest = ?, retained_source_digests_json = ?, "
                 "completion_warnings_json = ?, "

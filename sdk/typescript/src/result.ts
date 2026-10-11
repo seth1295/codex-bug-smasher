@@ -1,6 +1,10 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  BugCoverageDocument,
+  BugFindingsDocument,
+  BugPriority,
+  BugScanManifest,
   CoverageDocument,
   Finding,
   FindingsDocument,
@@ -45,12 +49,19 @@ export interface ScanResultOptions {
   sarifPath?: string | null;
   threatModelPath?: string | null;
   repositoryFindings?: readonly RepositoryFinding[];
+  bugManifest?: BugScanManifest | null;
+  bugFindings?: BugFindingsDocument | null;
+  bugCoverage?: BugCoverageDocument | null;
 }
 
 export class ScanResult {
   public readonly manifest: ScanManifest;
   public readonly findings: FindingsDocument;
   public readonly coverage: CoverageDocument;
+  public readonly bugManifest: BugScanManifest | null;
+  public readonly bugFindings: BugFindingsDocument | null;
+  public readonly bugCoverage: BugCoverageDocument | null;
+  public readonly reviewType: "security" | "functional_bug";
   public readonly scanDir: string;
   public readonly threadId: string;
   public readonly turnResult: Readonly<TurnResultMetadata>;
@@ -63,6 +74,10 @@ export class ScanResult {
     this.manifest = options.manifest;
     this.findings = options.findings;
     this.coverage = options.coverage;
+    this.bugManifest = options.bugManifest ?? null;
+    this.bugFindings = options.bugFindings ?? null;
+    this.bugCoverage = options.bugCoverage ?? null;
+    this.reviewType = this.bugFindings ? "functional_bug" : "security";
     this.scanDir = options.scanDir;
     this.threadId = options.threadId;
     this.turnResult = options.turnResult;
@@ -121,18 +136,33 @@ export class ScanResult {
   }
 
   public hasFindingsAtOrAbove(threshold: SeverityLevel): boolean {
+    if (this.bugFindings !== null) {
+      throw new TypeError(
+        "Severity thresholds do not apply to functional bug scans; use hasBugsAtOrAbove().",
+      );
+    }
     severityThresholdRank(threshold);
     return this.findings.findings.some((finding) =>
       meetsSeverity(finding, threshold),
     );
   }
 
+  public hasBugsAtOrAbove(priority: BugPriority): boolean {
+    if (this.bugFindings === null) return false;
+    const priorities: BugPriority[] = ["P0", "P1", "P2", "P3"];
+    const threshold = priorities.indexOf(priority);
+    return this.bugFindings.findings.some(
+      (finding) => priorities.indexOf(finding.priority) <= threshold,
+    );
+  }
+
   public toJSON(): Record<string, unknown> {
     return {
-      manifest: this.manifest,
+      manifest: this.bugManifest ?? this.manifest,
       repositoryFindings: this.repositoryFindings,
-      findings: this.findings,
-      coverage: this.coverage,
+      findings: this.bugFindings ?? this.findings,
+      coverage: this.bugCoverage ?? this.coverage,
+      bugFindings: this.bugFindings,
       scanDir: this.scanDir,
       threadId: this.threadId,
       reportPath: this.reportPath,

@@ -876,8 +876,8 @@ describe("CodexSecurity orchestration", () => {
       repository,
       target: { kind: "paths", paths: ["src"] },
       mode: "deep",
-      workers: 4,
-      subagents: 3,
+      workers: 2,
+      subagents: 1,
       stopAfterNoNew: 4,
       stopAfterConsecutiveErrors: 3,
       maxDiscoveryRuns: 40,
@@ -896,7 +896,7 @@ describe("CodexSecurity orchestration", () => {
         source: "OPENAI_API_KEY",
         verified: false,
       },
-      model: "gpt-5.6-sol",
+      model: "gpt-6-luna",
       reasoningEffort: "xhigh",
     });
     await expect(
@@ -938,7 +938,9 @@ describe("CodexSecurity orchestration", () => {
       },
     );
 
-    await expect(client.preflight(repository)).resolves.toMatchObject({
+    await expect(
+      client.preflight(repository, { mode: "deep" }),
+    ).resolves.toMatchObject({
       model: "configured-model",
       reasoningEffort: "high",
     });
@@ -971,7 +973,7 @@ describe("CodexSecurity orchestration", () => {
     );
 
     await expect(
-      client.preflight(repository, { maxCostUsd: 5 }),
+      client.preflight(repository, { mode: "deep", maxCostUsd: 5 }),
     ).resolves.toMatchObject({
       model: "gpt-5.6-terra",
       reasoningEffort: "high",
@@ -1064,6 +1066,24 @@ describe("CodexSecurity orchestration", () => {
     await expect(client.preflight(repository, { workers: 1 })).rejects.toThrow(
       "Deep scan settings require deep mode",
     );
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        cyberAccessProgram: "standard",
+      }),
+    ).rejects.toThrow("cyberAccessProgram is a security-only setting");
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        postScanPromptFile: join(root, "unused-post-scan.md"),
+      }),
+    ).rejects.toThrow("postScanPromptFile are not supported");
+    await expect(
+      client.preflight(repository, {
+        mode: "deep",
+        validationPromptFile: join(root, "unused-validation.md"),
+      }),
+    ).rejects.toThrow("Custom validation prompts are not supported");
     await expect(
       client.preflight(repository, { maxTimeHours: 1.5 }),
     ).rejects.toThrow("Deep scan settings require deep mode");
@@ -2688,7 +2708,13 @@ describe("CodexSecurity orchestration", () => {
     const ambientHome = join(root, "ambient-home");
     const codexHome = join(root, "runtime-home");
     const scanDir = join(root, "scan");
+    const selectedPath = join(repository, "src", "invoice_math.py");
+    const sourcePluginRoot = fileURLToPath(
+      new URL("../../../plugins/codex-security/", import.meta.url),
+    );
     await mkdir(repository);
+    await mkdir(dirname(selectedPath), { recursive: true });
+    await writeFile(selectedPath, "def prorate(): return 0\n");
     await mkdir(join(ambientHome, "codex-security"), { recursive: true });
     await mkdir(codexHome);
     await mkdir(scanDir, { mode: 0o700 });
@@ -2707,6 +2733,7 @@ describe("CodexSecurity orchestration", () => {
       ].join("\n"),
     );
     let recipe: Record<string, unknown> | undefined;
+    const capturedDeepPermissionOverrides: string[] = [];
     const client = new TestClient(
       {},
       {
@@ -2716,7 +2743,14 @@ describe("CodexSecurity orchestration", () => {
             join(ambientHome, "codex-security", "config.toml"),
             "[deep_scan]\nstop_after_no_new = 99\n",
           );
-          return preparedRuntime(codexHome);
+          const runtime = preparedRuntime(codexHome);
+          runtime.plugin = {
+            ...runtime.plugin,
+            pluginRoot: sourcePluginRoot,
+            installedRoot: sourcePluginRoot,
+            marketplaceRoot: sourcePluginRoot,
+          };
+          return runtime;
         },
         resolvePluginPython: async () => "/managed/python",
         prepareOutputDir: async () => scanDir,
@@ -2737,13 +2771,23 @@ describe("CodexSecurity orchestration", () => {
           recipe = JSON.parse(input!).recipe;
           return mockScanRegistration(args, input);
         },
-        createCodex: codexFactory(deepSettingsCaptured),
+        createCodex: (options) => {
+          expect(options.config).toMatchObject({
+            model: "gpt-6-luna",
+            model_reasoning_effort: "xhigh",
+          });
+          capturedDeepPermissionOverrides.push(
+            ...(options.configOverrides ?? []),
+          );
+          return codexFactory(deepSettingsCaptured)();
+        },
       },
     );
 
     await expect(
       client.run(repository, {
         mode: "deep",
+        target: ["src/invoice_math.py"],
         auth: "auto",
         workers: 2,
         subagents: 0,
@@ -2752,6 +2796,19 @@ describe("CodexSecurity orchestration", () => {
         maxTimeHours: 1.5,
       }),
     ).rejects.toThrow("deep scan settings captured");
+    const permissionOverrides = capturedDeepPermissionOverrides.filter(
+      (override) => override.startsWith("permissions.codex_security_scan="),
+    );
+    expect(permissionOverrides).toHaveLength(1);
+    const selectedReadRoot = await realpath(selectedPath);
+    expect(
+      parseToml(permissionOverrides[0]!).permissions.codex_security_scan
+        .filesystem[selectedReadRoot],
+    ).toEqual({ ".": "read" });
+    expect(
+      parseToml(permissionOverrides[0]!).permissions.codex_security_scan
+        .filesystem[repository],
+    ).toBeUndefined();
     const configuration = await readFile(
       join(codexHome, "codex-security", "config.toml"),
       "utf8",
@@ -2943,8 +3000,8 @@ describe("CodexSecurity orchestration", () => {
       expect(
         parseToml(await readFile(runtimeConfig, "utf8"))["deep_scan"],
       ).toEqual({
-        workers: 4,
-        subagents: 3,
+        workers: 2,
+        subagents: 1,
         stop_after_no_new: 4,
         stop_after_consecutive_errors: 3,
         max_discovery_runs: 40,
@@ -3626,15 +3683,15 @@ describe("CodexSecurity orchestration", () => {
       expect(prompt).not.toContain("$CODEX_SECURITY_SCAN_ID");
       if (mode === "deep") {
         const deepScanArguments = prompt.match(
-          /start_codex_security_deep_scan with (\{[^\n]+\});/,
+          /start_codex_functional_bug_scan with (\{[^\n]+\});/,
         );
         expect(deepScanArguments).not.toBeNull();
         expect(JSON.parse(deepScanArguments![1]!)).toEqual({ scanId });
       } else {
-        expect(prompt).not.toContain("start_codex_security_deep_scan");
+        expect(prompt).not.toContain("start_codex_functional_bug_scan");
       }
       expect(prompt.includes("false_positive_feedback.json")).toBe(
-        withFeedback,
+        withFeedback && mode !== "deep",
       );
       await client.close();
     },
@@ -4565,7 +4622,6 @@ describe("CodexSecurity orchestration", () => {
         const result = client.run(repository, {
           mode: "deep",
           maxCostUsd: 0.004,
-          postScanPrompt: "Do not spend another model turn.",
           onWarning: (warning) => warnings.push(warning),
           signal: AbortSignal.timeout(5_000),
         });
@@ -5835,12 +5891,12 @@ describe("CodexSecurity orchestration", () => {
     await expect(client.run(repository, { mode: "deep" })).rejects.toThrow(
       "prompt captured",
     );
-    expect(prompt()).toContain("$codex-security:deep-security-scan");
+    expect(prompt()).toContain("$codex-security:deep-bug-scan");
     expect(prompt()).not.toContain("record_codex_security_scan_draft");
     expect(prompt()).toContain("complete_codex_security_scan");
     expect(prompt()).not.toContain("do not finalize or seal them");
     expect(prompt()).toContain(
-      'start_codex_security_deep_scan with {"scanId":"scan_example_001"}',
+      'start_codex_functional_bug_scan with {"scanId":"scan_example_001"}',
     );
     expect(prompt()).not.toContain(
       "This exhaustive scan authorizes the delegated-worker phases",

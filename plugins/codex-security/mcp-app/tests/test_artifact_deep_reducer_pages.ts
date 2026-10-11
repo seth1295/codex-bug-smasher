@@ -9,6 +9,7 @@ import type {
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importModule } from "./import-module.ts";
 
 type SourceFinding = { id: string; finding: unknown };
@@ -25,7 +26,7 @@ const {
       export * from "./artifact-deep-reducer-pages.ts";
       export * from "./artifact-deep-reducer.ts";
     `,
-    resolveDir: new URL("../src/", import.meta.url).pathname,
+    resolveDir: fileURLToPath(new URL("../src/", import.meta.url)),
   },
 });
 
@@ -109,6 +110,7 @@ try {
   const noRefs = finding("legacy-without-refs");
   const worker = {
     scanId,
+    reviewType: "functional_bug",
     findings: [fresh],
     scope: { summary: largeText },
     coverage: {
@@ -120,8 +122,8 @@ try {
   };
   const previous = {
     scanId,
+    reviewType: "functional_bug",
     findings: [canonical, legacyCanonical, noRefs],
-    threatModel: { summary: largeText },
   };
   const workerPath = path.join(workerRoot, "result.json");
   const previousPath = path.join(previousRoot, "result.json");
@@ -143,7 +145,7 @@ try {
   const projected = await readDocument(context);
   assert.equal(projected.discoveries[0].result.findings[0].summary, largeText);
   assert.deepEqual(projected.discoveries[0].result.scope, worker.scope);
-  assert.deepEqual(projected.previous.threatModel, previous.threatModel);
+  assert.equal(projected.previous.reviewType, "functional_bug");
   assert.deepEqual(
     projected.previous.findings.map(
       (entry: { provenance: { sourceFindingIds: string[] } }) =>
@@ -232,12 +234,12 @@ try {
   // Submitting only the projection still preserves complete originals and history.
   await recordCodexSecurityDeepReduction(context, {
     scanId,
+    reviewType: "functional_bug",
     findings: [
       ...projected.discoveries[0].result.findings,
       ...projected.previous.findings,
     ],
     scope: projected.discoveries[0].result.scope,
-    threatModel: projected.previous.threatModel,
   });
   const saved = await readJson(outputRoot, "result.json");
   const allSources: SourceFinding[] = saved.findings.flatMap(

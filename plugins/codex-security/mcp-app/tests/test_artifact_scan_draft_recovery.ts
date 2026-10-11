@@ -43,6 +43,10 @@ const findingFor = (candidateId: string) => ({
 
 for (const observation of ["checkpoint head", "worker result"]) {
   test(`worker: reopening survives replacement of the ${observation} during a read`, async (t) => {
+    if (process.platform === "win32" && observation === "worker result") {
+      t.skip("Windows does not permit replacing the open result file in this fixture.");
+      return;
+    }
     const f = await fixture(t, "worker");
     const task = { id: "review", ...generic };
     const headPath = path.join(f.root, "checkpoint-head.json");

@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importModule } from "./import-module.ts";
 
 export const {
@@ -36,7 +37,7 @@ export const {
       export * from "./registry.ts";
       export { classifyCodexWorkerError } from "./errors.ts";
     `,
-    resolveDir: new URL("../src/deep-scan/", import.meta.url).pathname,
+    resolveDir: fileURLToPath(new URL("../src/deep-scan/", import.meta.url)),
   },
   loader: { ".md": "text" },
 });
@@ -68,6 +69,7 @@ export async function fixtureRun(
       status: "running" as const,
       targetPath: path.join(root, "target"),
       scope: ".",
+      sourceReadPaths: ["."],
       scanDir: path.join(root, "scan"),
       config: {
         workers: 1,
@@ -322,8 +324,9 @@ export class FakeStore {
       ? await readJson(latestReducer.resultManifestPath!)
       : {
           scanId: this.run.scanId,
+          reviewType: "functional_bug",
           findings: [],
-          coverage: {
+          scanCoverage: {
             completeness: "partial",
             surfaces: [],
             explicitExclusions: [],
@@ -334,10 +337,10 @@ export class FakeStore {
       scan: {
         scanId: draft.scanId,
         mode: "deep",
-        ...(draft.threatModel ? { threatModel: draft.threatModel } : {}),
+        reviewType: "functional_bug",
       },
       findings: draft.findings,
-      coverage: draft.coverage,
+      coverage: draft.scanCoverage,
     });
     this.run.status = "succeeded";
     this.run.terminalReason = input.reason;
@@ -653,9 +656,7 @@ async function writeDedupArtifacts(
     mergedFindings.set(findingIdentity, {
       ...mergedFindings.get(findingIdentity),
       ...finding,
-      ...(options.evidence === undefined
-        ? {}
-        : { rootCause: { summary: options.evidence } }),
+      ...(options.evidence === undefined ? {} : { summary: options.evidence }),
       provenance: {
         ...finding.provenance,
         sourceFindingIds: [
@@ -695,22 +696,35 @@ export function standardScanDraft(
 ) {
   return {
     scanId,
-    threatModel: { summary: `Independent threat model for ${workerLabel}.` },
+    reviewType: "functional_bug",
     findings: candidateId
       ? [
           {
-            ruleId: "sql-injection.fixture",
-            title: "Unsafe fixture query",
+            ruleId: "fixture.incorrect-result",
+            identity: { anchor: candidateId },
+            title: "Incorrect fixture result",
             summary:
-              "A request-controlled value reaches a security-sensitive sink.",
-            severity: { level: "high" },
+              "A fixture query uses an incorrect operation for the documented input.",
+            priority: "P2",
+            category: "API-contract",
             confidence: {
               level: "high",
-              rationale: "Source evidence establishes reachability.",
+              rationale: "A focused reproduction shows the wrong output.",
             },
-            taxonomy: { category: "sql-injection", cwe: ["CWE-89"] },
             locations: [{ path: "fixture.py", startLine: 1, endLine: 1 }],
-            remediation: "Use a parameterized query.",
+            expected:
+              "The function returns the documented result for the input.",
+            actual: "The function returns an incorrect value.",
+            impact: "The caller receives incorrect data.",
+            validation: {
+              status: "validated",
+              method: "Focused deterministic reproduction.",
+              evidence: ["The fixture input produced an incorrect output."],
+              counterEvidence: [],
+            },
+            suggestedCorrection:
+              "Correct the operation at the source location.",
+            tests: ["Add a regression test for this input."],
             provenance: {
               source: "local_plugin",
               candidateId,

@@ -116,6 +116,7 @@ import {
 } from "./bulk-scan-discovery.js";
 import {
   DEFAULT_CODEX_CONFIG,
+  DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL,
   deepMerge,
   EXTERNAL_CODEX_PROVIDERS,
   isExternalModelProvider,
@@ -1228,7 +1229,11 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
   environment: process.env,
   prepareAuthenticationHome: prepareCodexSecurityCredentialHome,
   checkForUpdate: (signal) =>
-    checkForUpdate({ environment: process.env, signal }),
+    checkForUpdate({
+      environment: process.env,
+      entrypoint: process.argv[1],
+      signal,
+    }),
   hasStoredChatGPTSignIn: async (signal) => {
     signal?.throwIfAborted();
     const environment = Object.fromEntries(
@@ -3234,10 +3239,11 @@ export async function main(
     },
   });
   const cli = Cli.create("codex-security", {
-    description: "Find, review, and fix security issues in your code.",
+    description:
+      "Deep-scan for functional bugs; Standard mode reviews security issues.",
     version: VERSION,
     mcp: {
-      command: "npx --yes @openai/codex-security --mcp",
+      command: localMcpCommand(),
       tools: { discovery: "direct" },
       instructions:
         "Use info for read-only SDK metadata. Scans and other state-changing commands are CLI-only because the MCP transport cannot cancel active commands.",
@@ -3449,7 +3455,10 @@ export async function main(
             .describe(
               "Reuse completed work in the named local findings workflow.",
             ),
-          cyberAccessProgram: ScanSettingsSchema.shape.cyberAccessProgram,
+          cyberAccessProgram:
+            ScanSettingsSchema.shape.cyberAccessProgram.describe(
+              "Security-only access program for Standard scans; not supported for deep functional bug scans.",
+            ),
           auth: ScanSettingsSchema.shape.auth.describe(
             "Select ChatGPT, OPENAI_API_KEY/CODEX_API_KEY, or automatic authentication (default: auto).",
           ),
@@ -3502,11 +3511,11 @@ export async function main(
             .optional()
             .describe("Git base ref for --working-tree (default: HEAD)."),
           mode: ScanSettingsSchema.shape.mode.describe(
-            "Scan mode (default: standard); deep supports repository and path targets.",
+            "Scan mode (default: standard); deep runs a resumable functional bug scan on repository or path targets.",
           ),
           ...DEEP_SCAN_OPTION_SCHEMAS,
           ...modelOptions(
-            `OpenAI model to use (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model}).`,
+            `Model to use (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
           ).shape,
           provider: PROVIDER_OPTION,
           outputDir: optionValue("--output-dir")
@@ -3566,6 +3575,25 @@ export async function main(
         .refine((options) => !options.patch || !options.dryRun, {
           message: "--patch cannot be combined with --dry-run.",
         })
+        .refine(
+          (options) =>
+            options.mode !== "deep" ||
+            (!options.patch &&
+              options.patchSeverity === undefined &&
+              !options.createPr),
+          {
+            message:
+              "Patch options are not supported for functional bug scans.",
+          },
+        )
+        .refine(
+          (options) =>
+            options.mode !== "deep" || options.cyberAccessProgram === undefined,
+          {
+            message:
+              "--cyber-access-program is not supported for functional bug scans.",
+          },
+        )
         .refine(
           (options) => !options.mock || (!options.dryRun && !options.patch),
           {
@@ -4110,7 +4138,9 @@ export async function main(
           postScanPromptFile: optionValue("--post-scan-prompt-file")
             .optional()
             .describe("Run FILE after each scan, including failures."),
-          ...modelOptions("Model for planning and component scans.").shape,
+          ...modelOptions(
+            `Model for planning and component scans (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
+          ).shape,
           provider: PROVIDER_OPTION,
           maxCost: z
             .number()
@@ -4200,7 +4230,9 @@ export async function main(
             const candidate = new ScanDashboard(errorOutput, {
               repository,
               presentation: "components",
-              model: scanModelConfiguration(await mergedCodexConfig(config)),
+              model: scanModelConfiguration(
+                await mergedCodexConfig(config, { mode: settings.mode }),
+              ),
               mode: settings.mode,
               maxCostUsd: settings.maxCostUsd,
               showCost: options.showCost,
@@ -4259,7 +4291,9 @@ export async function main(
                 dashboard.showComponents("Combining duplicate findings");
               else
                 errorOutput.write(
-                  "codex-security: Matching component findings by root cause...\n",
+                  settings.mode === "deep"
+                    ? "codex-security: Grouping validated bug findings by fingerprint...\n"
+                    : "codex-security: Matching component findings by root cause...\n",
                 );
             },
             environment: dependencies.environment,
@@ -4275,7 +4309,15 @@ export async function main(
               dashboard?.finishComponents(result);
               stopDashboard();
               errorOutput.write(
-                `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} findings → ${result.findingCount} groups${result.deduplication?.status === "incomplete" ? " (matching incomplete)" : ""}.\nReport: ${errorMessage(result.reportPath)}\n`,
+                result.reviewType === "functional_bug"
+                  ? `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} validated bugs → ${result.findingCount} groups (${Object.entries(
+                      result.priorityCounts ?? {},
+                    )
+                      .map(([priority, count]) => `${priority} ${count}`)
+                      .join(
+                        ", ",
+                      )}).\nReport: ${errorMessage(result.reportPath)}\n`
+                  : `Component scans: ${result.completed} complete, ${result.incomplete} incomplete, ${result.failed} failed.\n${result.sourceFindingCount} findings → ${result.findingCount} groups${result.deduplication?.status === "incomplete" ? " (matching incomplete)" : ""}.\nReport: ${errorMessage(result.reportPath)}\n`,
               );
               if (result.retryPlanPath !== undefined)
                 errorOutput.write(
@@ -4360,7 +4402,7 @@ export async function main(
           .optional()
           .describe("Run FILE after each scan, including failures."),
         ...modelOptions(
-          `OpenAI model for each repository (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model}).`,
+          `Model for each repository (default: ${DEFAULT_SCAN_MODEL_CONFIGURATION.model} for Standard security scans and ${DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL} for Deep bug scans).`,
         ).shape,
         provider: PROVIDER_OPTION,
         maxAttempts: z
@@ -4524,6 +4566,12 @@ export async function main(
                       return {
                         coverage: contract.coverage,
                         findings: contract.findings,
+                        ...(contract.bugFindings === undefined
+                          ? {}
+                          : {
+                              bugFindings: contract.bugFindings,
+                              reviewType: "functional_bug" as const,
+                            }),
                         cost:
                           (scan["cost"] as unknown as ScanCost | undefined) ??
                           null,
@@ -5859,6 +5907,11 @@ export async function main(
     errorOutput.write(`codex-security: ${errorMessage(error)}\n`);
     return 2;
   }
+}
+
+function localMcpCommand(): string {
+  const entrypoint = process.argv[1] ?? fileURLToPath(import.meta.url);
+  return `"${process.execPath}" "${entrypoint}" --mcp`;
 }
 
 async function runScanImport(
@@ -8184,10 +8237,9 @@ async function executeScan(
       codexOverrides: arguments_.codexOverrides,
     };
     const selectedProfileName = config.codexOverrides?.["profile"];
-    const effectiveConfiguration = {
-      ...DEFAULT_CODEX_CONFIG,
-      ...config.codexOverrides,
-    };
+    const effectiveConfiguration = await mergedCodexConfig(config, {
+      mode: arguments_.mode,
+    });
     ({ model: effectiveModel, reasoningEffort: effectiveReasoningEffort } =
       scanModelConfiguration(effectiveConfiguration));
     patchServiceTier =
@@ -8269,7 +8321,9 @@ async function executeScan(
         repository,
         mode: arguments_.mode,
         showCost,
-        model: scanModelConfiguration(await mergedCodexConfig(config)),
+        model: scanModelConfiguration(
+          await mergedCodexConfig(config, { mode: arguments_.mode }),
+        ),
         ...(arguments_.maxCostUsd === undefined
           ? {}
           : { maxCostUsd: arguments_.maxCostUsd }),
@@ -8742,9 +8796,10 @@ async function executeScan(
     deepScanStop,
   );
   const completedScan = (exitCode: number): ScanOutcome => {
+    const findingCount = result.bugFindings?.findings.length ?? findings.length;
     diagnostic("scan.completed", {
       coverage: result.coverage.completeness,
-      findings: findings.length,
+      findings: findingCount,
       scan_id: result.manifest.scan.id,
       estimated_usd: showCost ? result.cost?.estimatedUsd : undefined,
       cost_estimate:
@@ -9021,8 +9076,8 @@ function scanFailureMessage(
     return (
       "Codex Security's stored ChatGPT sign-in could not be refreshed. " +
       "Codex may still need it to load workspace-managed policies when an API key is selected for model authentication. " +
-      "If the sign-in recently changed, check 'npx @openai/codex-security login status' and retry. " +
-      "Otherwise run 'npx @openai/codex-security logout', then 'npx @openai/codex-security login'."
+      "If the sign-in recently changed, check it with this CLI's 'login status' command and retry. " +
+      "Otherwise use this CLI's 'logout' command, then its 'login' command."
     );
   }
   switch (classification) {
@@ -9147,6 +9202,36 @@ function printScanSummary(
 ): void {
   const paint = (value: string, code: number | string): string =>
     color ? `\u001B[${code}m${value}\u001B[0m` : value;
+  if (result.bugFindings !== null) {
+    const counts = new Map<string, number>();
+    for (const finding of result.bugFindings.findings) {
+      counts.set(finding.priority, (counts.get(finding.priority) ?? 0) + 1);
+    }
+    const prioritySummary = (["P0", "P1", "P2", "P3"] as const)
+      .filter((priority) => counts.has(priority))
+      .map((priority) => `${counts.get(priority)} ${priority}`)
+      .join(", ");
+    errorOutput.write(
+      `${paint("Functional bug scan", "1;36")} · ${result.bugFindings.findings.length} confirmed bug${result.bugFindings.findings.length === 1 ? "" : "s"}${prioritySummary ? ` (${prioritySummary})` : ""}\n`,
+    );
+    errorOutput.write(
+      `Report: ${result.reportPath}\nCoverage: ${result.bugCoverage?.completeness ?? "unknown"}\n`,
+    );
+    if (result.bugCoverage?.deferred.length) {
+      errorOutput.write(
+        `${result.bugCoverage.deferred.length} items remain unvalidated or deferred; see the report.\n`,
+      );
+    }
+    if (showCost && result.cost) {
+      errorOutput.write(
+        `Estimated cost: $${result.cost.estimatedUsd.toFixed(4)}\n`,
+      );
+    }
+    if (deepScanStop?.reason) {
+      errorOutput.write(`${deepScanStop.reason}\n`);
+    }
+    return;
+  }
   const repositoryFindings = result.repositoryFindings;
   const findings = repositoryFindings ?? result.findings.findings;
   const severities = new Map<SeverityLevel, number>();

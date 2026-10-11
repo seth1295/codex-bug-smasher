@@ -128,6 +128,24 @@ describe("Codex configuration", () => {
     );
   });
 
+  test("uses the Deep functional bug model without changing the Standard default", async () => {
+    expect(scanModelConfiguration(await mergedCodexConfig({}))).toEqual({
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+    });
+    expect(
+      scanModelConfiguration(await mergedCodexConfig({}, { mode: "deep" })),
+    ).toEqual({ model: "gpt-6-luna", reasoningEffort: "xhigh" });
+    expect(
+      scanModelConfiguration(
+        await mergedCodexConfig(
+          { codexOverrides: { model: "configured-model" } },
+          { mode: "deep" },
+        ),
+      ),
+    ).toEqual({ model: "configured-model", reasoningEffort: "xhigh" });
+  });
+
   test("resolves selected profile model and effort before root settings", async () => {
     const scenarios = [
       {

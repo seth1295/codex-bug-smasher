@@ -75,6 +75,16 @@ test("accepts valid source and ignores untracked files", () => {
   assert.equal(result.stderr, "");
 });
 
+test("accepts a source file after its deletion is staged", () => {
+  const root = fixture({ "legacy-skill.md": "Retired source.\n" });
+  unlinkSync(join(root, "legacy-skill.md"));
+  git(root, "add", "-u", "--", "legacy-skill.md");
+  const result = runChecker("--plugin-root", root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "Plugin source compatibility checks passed.\n");
+  assert.equal(result.stderr, "");
+});
+
 test("checkout preserves source size with autocrlf", () => {
   const root = fixture();
   copyFileSync(

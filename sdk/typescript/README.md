@@ -1,8 +1,9 @@
-# `@openai/codex-security`
+# Codex Bug Smasher TypeScript SDK
 
-Run Codex Security from TypeScript or the command line to find, validate, and fix
-security vulnerabilities in your code. The package includes the Codex runtime,
-security plugin, and TypeScript declarations. It uses ES modules.
+Run deep functional bug scans from TypeScript or the command line. Standard
+security scanning remains available as a separate mode. This fork is distributed
+as source today and is not published under the `@openai/codex-security` package
+name. It uses ES modules.
 
 - Scan repositories, selected paths, or Git changes. Deep scans run parallel
   discovery workers on repositories and selected paths.
@@ -21,9 +22,15 @@ Before version `1.0.0`, minor releases may change the public API.
 
 ## Install
 
+Build and run the checked-out CLI from the repository root:
+
 ```bash
-npm install @openai/codex-security
-npx @openai/codex-security --version
+corepack pnpm --dir sdk/typescript install --frozen-lockfile
+corepack pnpm --dir plugins/codex-security/mcp-app install --frozen-lockfile
+node plugins/codex-security/mcp-app/scripts/build_native.mjs
+node plugins/codex-security/mcp-app/scripts/build_mcp_app.mjs --output plugins/codex-security/mcp --native host
+corepack pnpm --dir sdk/typescript run build
+node sdk/typescript/bin/codex-security.mjs --version
 ```
 
 Supported runtimes:
@@ -31,13 +38,14 @@ Supported runtimes:
 - Node.js 22.13.0+ within 22.x, or Node.js 24.x or 26.x, on macOS, Linux, or Windows.
 - Python 3.10+ for scans, policy generation, exports, scan history, and saved
   findings. Python 3.10 also needs `tomli`.
+- Rust 1.97.1 with Cargo to build the host plugin runtime.
 
 ## Authentication
 
 Sign in with ChatGPT:
 
 ```bash
-npx @openai/codex-security login
+node sdk/typescript/bin/codex-security.mjs login
 ```
 
 For CI, set `OPENAI_API_KEY` or `CODEX_API_KEY` in the scan process's environment.
@@ -45,7 +53,7 @@ These keys apply to the current command without replacing your saved login.
 To save an API key instead, pass it on stdin:
 
 ```bash
-printenv OPENAI_API_KEY | npx @openai/codex-security login --with-api-key
+printenv OPENAI_API_KEY | node sdk/typescript/bin/codex-security.mjs login --with-api-key
 ```
 
 SDK calls accept `auth: "auto" | "chatgpt" | "api-key"`. The default, `"auto"`,
@@ -67,13 +75,13 @@ allows it. Otherwise, open an SSH tunnel from your local machine:
 ssh -L 1455:localhost:1455 user@remote-host
 ```
 
-Run `npx @openai/codex-security login` in that SSH session, then open its sign-in
+Run `node sdk/typescript/bin/codex-security.mjs login` in that SSH session, then open its sign-in
 URL in your local browser. Keep SSH connected until login finishes.
 
 ### Amazon Bedrock
 
 Bedrock scans use AWS credentials and model access. They do not require
-`codex-security login` or an OpenAI API key. See the
+`node sdk/typescript/bin/codex-security.mjs login` or an API key. See the
 [Bedrock guide](https://github.com/openai/codex-security/blob/main/docs/bedrock.md)
 for setup, model selection, and verification.
 
@@ -82,7 +90,7 @@ for setup, model selection, and verification.
 Scan a repository you own or have permission to assess:
 
 ```ts
-import { CodexSecurity } from "@openai/codex-security";
+import { CodexSecurity } from "./sdk/typescript/dist/index.js";
 
 const security = new CodexSecurity();
 
@@ -107,22 +115,36 @@ directory must be private to you (`chmod 700`).
 
 ### Read results
 
-| Result                            | Contents                                                         |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `findings.findings`               | Findings from this scan.                                         |
-| `reportPath`                      | Path to the Markdown report.                                     |
-| `coverage`                        | What the scan assessed and any coverage gaps.                    |
-| `repositoryFindings`              | This scan's findings plus earlier open findings, when available. |
-| `sarifPath`                       | SARIF export path, or `null`.                                    |
-| `threatModel` / `threatModelPath` | Saved threat model and document path; either can be `null`.      |
-| `cost`                            | Estimated model usage cost, or `null` when unavailable.          |
+| Result                            | Contents                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `findings.findings`               | Security findings from Standard scans.                                    |
+| `bugFindings.findings`            | Confirmed bugs from Deep scans, with P0-P3 priority.                      |
+| `reportPath`                      | Path to the Markdown report.                                              |
+| `coverage`                        | What the scan assessed and any coverage gaps.                             |
+| `repositoryFindings`              | This scan's findings plus earlier open findings, when available.          |
+| `sarifPath`                       | SARIF export path, or `null`.                                             |
+| `threatModel` / `threatModelPath` | Saved Standard scan threat model and document path; either can be `null`. |
+| `cost`                            | Estimated model usage cost, or `null` when unavailable.                   |
 
 Review coverage alongside findings. A report with no findings does not establish
-that the repository is secure. Reports and logs can contain source code,
+that the repository has no defects or security issues. Reports and logs can contain source code,
 vulnerability details, and credentials; review them before sharing.
 
 The SDK does not set your process's exit status. Use `hasFindingsAtOrAbove()`
-as in the example to enforce a severity threshold.
+for Standard scan severity thresholds, or `hasBugsAtOrAbove("P1")` for Deep
+scan bug priority. Deep scans do not modify the repository.
+
+Start a functional bug scan with `mode: "deep"`; read confirmed bugs from
+`bugFindings.findings` and keep its P0–P3 priorities separate from security
+severity:
+
+```ts
+const result = await security.run("/path/to/repository", { mode: "deep" });
+
+for (const bug of result.bugFindings?.findings ?? []) {
+  console.log(bug.priority, bug.title, bug.locations);
+}
+```
 
 ### Scan options and output
 
@@ -139,18 +161,18 @@ const result = await security.run("/path/to/repository", {
 });
 ```
 
-| Option                                      | Use                                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `target`                                    | Whole repository (default), repository-relative paths, or a `DiffTarget`.      |
-| `mode`                                      | `"standard"` (default) or `"deep"`. Deep scans support repositories and paths. |
-| `knowledgeBasePaths`                        | Supporting text, PDF, DOCX files, or directories.                              |
-| `scanPrompt` / `scanPromptFile`             | Additional scan instructions. Inline text takes precedence.                    |
-| `validationPrompt` / `validationPromptFile` | Custom validation instructions for standard scans.                             |
-| `postScanPrompt` / `postScanPromptFile`     | Follow-up instructions after the scan.                                         |
-| `outputDir`                                 | Results directory; omit to use the state directory.                            |
-| `archiveExisting`                           | Move previous results aside before reusing `outputDir`.                        |
-| `maxCostUsd`                                | Stop at an estimated model cost; see [cost limits](#progress-and-cost).        |
-| `signal`                                    | An `AbortSignal` to cancel the scan.                                           |
+| Option                                      | Use                                                                                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `target`                                    | Whole repository (default), repository-relative paths, or a `DiffTarget`.                                               |
+| `mode`                                      | `"standard"` (default) or `"deep"`. Deep mode runs a resumable functional bug scan over repositories or selected paths. |
+| `knowledgeBasePaths`                        | Supporting text, PDF, DOCX files, or directories.                                                                       |
+| `scanPrompt` / `scanPromptFile`             | Additional scan instructions. Inline text takes precedence.                                                             |
+| `validationPrompt` / `validationPromptFile` | Custom validation instructions for standard scans.                                                                      |
+| `postScanPrompt` / `postScanPromptFile`     | Follow-up instructions after the scan.                                                                                  |
+| `outputDir`                                 | Results directory; omit to use the state directory.                                                                     |
+| `archiveExisting`                           | Move previous results aside before reusing `outputDir`.                                                                 |
+| `maxCostUsd`                                | Stop at an estimated model cost; see [cost limits](#progress-and-cost).                                                 |
+| `signal`                                    | An `AbortSignal` to cancel the scan.                                                                                    |
 
 The exported `ScanOptions` type describes all options and callbacks. For full
 CLI behavior, see [scan options and output](docs/cli.md#scan-options-and-output).
@@ -158,7 +180,7 @@ CLI behavior, see [scan options and output](docs/cli.md#scan-options-and-output)
 ### Scan a diff
 
 ```ts
-import { DiffTarget } from "@openai/codex-security";
+import { DiffTarget } from "./sdk/typescript/dist/index.js";
 
 const result = await security.run("/path/to/repository", {
   target: DiffTarget.refs({ base: "origin/main" }),
@@ -196,7 +218,10 @@ for supported overrides and defaults.
 Load shared CLI and SDK settings explicitly:
 
 ```ts
-import { CodexSecurity, loadProjectConfig } from "@openai/codex-security";
+import {
+  CodexSecurity,
+  loadProjectConfig,
+} from "./sdk/typescript/dist/index.js";
 
 const { config, options } = await loadProjectConfig("codex-security.yaml");
 const security = new CodexSecurity(config);
@@ -253,8 +278,10 @@ const result = await security.run("/path/to/repository", {
 ```
 
 `workers` controls concurrent discovery workers; `subagents` controls delegation
-within each worker. Time and run limits apply to discovery. After discovery
-stops, the scan combines and returns completed findings. See
+within each worker. Defaults are two discovery workers and one investigator
+subagent per worker. Time and run limits apply to discovery. After discovery
+stops, the scan combines completed findings, validated bugs, and deferred
+hypotheses. See
 [deep scan settings](docs/cli.md#configure-deep-scans) for defaults and saved settings.
 
 ### Progress and cost
@@ -298,15 +325,17 @@ To validate GitHub code scanning alerts, first import them with
 ## CLI
 
 ```bash
-npx @openai/codex-security scan .
-npx @openai/codex-security scan . --path src --path tests
-npx @openai/codex-security scan . --diff origin/main --json
-npx @openai/codex-security scan . --dry-run
+node sdk/typescript/bin/codex-security.mjs scan .
+node sdk/typescript/bin/codex-security.mjs scan . --path src --path tests
+node sdk/typescript/bin/codex-security.mjs scan . --diff origin/main --json
+node sdk/typescript/bin/codex-security.mjs scan . --dry-run
+node sdk/typescript/bin/codex-security.mjs scan . --mode deep
 ```
 
 Use `--help` to find commands and `<command> --help` for options. Scans are
-report-only by default. Add `--fail-on-severity high` to return exit code `1`
-for high or critical findings; incomplete scans and execution failures return `2`.
+report-only by default. `--fail-on-severity high` applies to Standard scan
+severity; Deep scans use P0-P3 priority in their report and the SDK
+`hasBugsAtOrAbove()` helper. Incomplete scans and execution failures return `2`.
 
 The [CLI reference](docs/cli.md) covers scan history, reruns, bulk and component
 scans, custom validation, imports, patching, and integrations.
@@ -314,8 +343,8 @@ scans, custom validation, imports, patching, and integrations.
 ### Generate a security policy
 
 ```bash
-npx @openai/codex-security policy .
-npx @openai/codex-security policy . --path services/api
+node sdk/typescript/bin/codex-security.mjs policy .
+node sdk/typescript/bin/codex-security.mjs policy . --path services/api
 ```
 
 `policy` drafts `SECURITY.md` outside the checkout. Review the draft before
@@ -329,8 +358,8 @@ headless use, artifacts, and review requirements.
 Export saved findings or a threat model without starting another analysis:
 
 ```bash
-npx @openai/codex-security export --scan SCAN_ID --export-format sarif --output results.sarif
-npx @openai/codex-security export --scan SCAN_ID --artifact threat-model --output threatmodel.md
+node sdk/typescript/bin/codex-security.mjs export --scan SCAN_ID --export-format sarif --output results.sarif
+node sdk/typescript/bin/codex-security.mjs export --scan SCAN_ID --artifact threat-model --output threatmodel.md
 ```
 
 The SDK provides `exportArtifact()` for the same offline operations. See
@@ -377,7 +406,7 @@ system, see [SDK records deduplication](docs/dedupe-records.md).
 ### Running without Docker
 
 ```bash
-npx @openai/codex-security serve --port 3000
+node sdk/typescript/bin/codex-security.mjs serve --port 3000
 ```
 
 Open `http://127.0.0.1:3000/dashboard`. Startup and listing need no API key;

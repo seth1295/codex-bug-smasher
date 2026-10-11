@@ -29,7 +29,12 @@ import {
   type ComponentScanEvent,
   type ComponentScanOptions,
 } from "../src/component-scan.js";
-import type { Finding, SeverityLevel } from "../src/models.js";
+import type {
+  BugFinding,
+  BugPriority,
+  Finding,
+  SeverityLevel,
+} from "../src/models.js";
 import { ScanResult } from "../src/result.js";
 import * as runtime from "../src/runtime.js";
 import { normalizeTarget, nullIfMissingFile } from "../src/targets.js";
@@ -118,6 +123,41 @@ function finding(
   } as Finding;
 }
 
+function bugFinding(
+  occurrenceId: string,
+  priority: BugPriority,
+  fingerprint: string,
+  title: string,
+): BugFinding {
+  return {
+    findingId: fingerprint,
+    occurrenceId,
+    ruleId: "invoice.proration-order",
+    identity: { anchor: "invoice-proration-order" },
+    fingerprints: { algorithm: "functional-bug/v1", primary: fingerprint },
+    title,
+    summary: "The calculation truncates before multiplication.",
+    priority,
+    category: "algorithm",
+    confidence: {
+      level: "high",
+      rationale: "The behavior reproduces directly.",
+    },
+    locations: [{ path: `${occurrenceId}.ts`, startLine: 12 }],
+    expected: "A 2/5 share of 500 is 200.",
+    actual: "The current implementation returns 0.",
+    impact: "The invoice amount is incorrect.",
+    validation: {
+      status: "validated",
+      method: "Execute the fixture function.",
+      evidence: [`${occurrenceId} returned 0 instead of 200.`],
+      reproduction: ["prorate(500, 2, 5)"],
+      counterEvidence: ["A sibling implementation returns 200."],
+    },
+    provenance: { source: "local_plugin", sourceFindingIds: [occurrenceId] },
+  };
+}
+
 async function completed(
   options: ScanOptions,
   findings = [finding(String(options.target))],
@@ -143,6 +183,65 @@ async function completed(
     "findings.json": result.findings,
     "coverage.json": result.coverage,
     "report.md": "Original report",
+  })) {
+    await writeFile(
+      join(result.scanDir, name),
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
+  }
+  return result;
+}
+
+async function completedBug(
+  options: ScanOptions,
+  bugs: BugFinding[],
+  hypotheses: Record<string, unknown>[] = [],
+) {
+  const original = fakeResult([], "complete");
+  const scanId = String(options.target);
+  original.manifest.scan.id = scanId;
+  original.findings.scanId = scanId;
+  original.coverage.scanId = scanId;
+  const bugManifest = {
+    documentType: "functional-bug-scan.scan-manifest",
+    schemaVersion: "1.0",
+    scan: { id: scanId, reviewType: "functional_bug" },
+  } as unknown as NonNullable<ScanResult["bugManifest"]>;
+  const bugFindings = {
+    documentType: "functional-bug-scan.findings",
+    schemaVersion: "1.0",
+    scanId,
+    findings: bugs,
+    hypotheses,
+  } as NonNullable<ScanResult["bugFindings"]>;
+  const bugCoverage = {
+    documentType: "functional-bug-scan.coverage",
+    schemaVersion: "1.0",
+    scanId,
+    mode: "deep_repository",
+    completeness: "complete",
+    inventoryStrategy: "repository",
+    includePaths: ["."],
+    excludePaths: [],
+    reviewedAreas: [{ label: "invoice arithmetic", disposition: "reviewed" }],
+    explicitExclusions: [],
+    deferred: [],
+  } as unknown as NonNullable<ScanResult["bugCoverage"]>;
+  const result = new ScanResult({
+    ...original,
+    scanDir: options.outputDir!,
+    threadId: scanId,
+    sarifPath: null,
+    bugManifest,
+    bugFindings,
+    bugCoverage,
+  });
+  await mkdir(result.scanDir, { recursive: true });
+  for (const [name, value] of Object.entries({
+    "scan-manifest.json": bugManifest,
+    "findings.json": bugFindings,
+    "coverage.json": bugCoverage,
+    "report.md": "Synthetic functional bug report",
   })) {
     await writeFile(
       join(result.scanDir, name),
@@ -452,6 +551,130 @@ test("bounds standard scans, continues after failure, and preserves partial resu
   ).toBe("Original report");
   expect(await readFile(summary.reportPath!, "utf8")).toContain(
     "./component-2/report.md",
+  );
+});
+
+test("aggregates deep bug priorities and deduplicates by functional fingerprint", async () => {
+  const paths = await fixture();
+  const first = bugFinding(
+    "occurrence-api",
+    "P2",
+    "fingerprint-shared",
+    "Proration truncates early",
+  );
+  const duplicate = bugFinding(
+    "occurrence-web",
+    "P1",
+    "fingerprint-shared",
+    "Proration truncates early",
+  );
+  const distinct = bugFinding(
+    "occurrence-shared",
+    "P3",
+    "fingerprint-rounding",
+    "Rounding is inconsistent",
+  );
+  const matchFindings = mock(async () => noMatches);
+  const summary = await scan(paths, {
+    scanOptions: { mode: "deep" },
+    matchFindings,
+    createSecurity: client(async (_repository, options) => {
+      const target = String(options.target);
+      if (target === "apps/api") return completedBug(options, [first]);
+      if (target === "apps/web") return completedBug(options, [duplicate]);
+      return completedBug(
+        options,
+        [distinct],
+        [{ id: "unreproduced-rounding", title: "Possible rounding edge case" }],
+      );
+    }),
+  });
+  expect(matchFindings).not.toHaveBeenCalled();
+  expect(summary).toMatchObject({
+    reviewType: "functional_bug",
+    findingCount: 2,
+    sourceFindingCount: 3,
+    priorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+    sourcePriorityCounts: { P0: 0, P1: 1, P2: 1, P3: 1 },
+    deduplication: {
+      confirmedGroups: 1,
+      uncertainPairs: 0,
+      status: "completed",
+    },
+  });
+  const saved = await json(summary.findingsPath!);
+  expect(saved).toMatchObject({
+    documentType: "functional-bug-scan.component-findings",
+    findingCount: 2,
+    sourceFindingCount: 3,
+    priorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+    sourcePriorityCounts: { P0: 0, P1: 1, P2: 1, P3: 1 },
+  });
+  expect(saved.findings).toHaveLength(2);
+  expect(saved.findings[0]).toMatchObject({
+    finding: { priority: "P1", confidence: { level: "high" } },
+    sources: [
+      { occurrenceId: "occurrence-api" },
+      { occurrenceId: "occurrence-web" },
+    ],
+  });
+  expect(saved.findings[0].finding.locations).toHaveLength(2);
+  expect(saved.findings[0].finding.validation.evidence).toEqual(
+    expect.arrayContaining([
+      "occurrence-api returned 0 instead of 200.",
+      "occurrence-web returned 0 instead of 200.",
+    ]),
+  );
+  expect(
+    saved.findings.flatMap(
+      ({ finding: item }: { finding: Record<string, unknown> }) =>
+        Object.keys(item),
+    ),
+  ).not.toEqual(expect.arrayContaining(["severity", "taxonomy", "attackPath"]));
+  expect(saved.hypotheses).toMatchObject([
+    {
+      hypothesis: { id: "unreproduced-rounding" },
+      sources: [{ componentId: "component-3" }],
+    },
+  ]);
+  const report = await readFile(summary.reportPath!, "utf8");
+  expect(report).toContain("Functional bug component report");
+  expect(report).toContain("P1 (high confidence)");
+  expect(report).toContain("Unvalidated hypotheses");
+  expect(report).toContain("Expected: A 2/5 share of 500 is 200.");
+  expect(report).toContain("Actual: The current implementation returns 0.");
+  expect(report).not.toContain("Severity");
+});
+
+test("CLI component summaries expose bug counts and priorities", async () => {
+  const paths = await fixture();
+  const configPath = join(paths.root, "deep.json");
+  await writeFile(configPath, JSON.stringify({ scan: { mode: "deep" } }));
+  const result = await cli(
+    paths,
+    ["--config", configPath, "--component", "apps/api"],
+    {
+      createSecurity: client(async (_repository, options) =>
+        completedBug(options, [
+          bugFinding(
+            "occurrence-cli",
+            "P0",
+            "fingerprint-critical",
+            "Invoice total overflows",
+          ),
+        ]),
+      ),
+    },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    reviewType: "functional_bug",
+    findingCount: 1,
+    sourceFindingCount: 1,
+    priorityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 },
+  });
+  expect(result.stderr).toContain(
+    "1 validated bugs → 1 groups (P0 1, P1 0, P2 0, P3 0)",
   );
 });
 

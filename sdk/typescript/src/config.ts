@@ -22,6 +22,8 @@ export interface ScanModelConfiguration {
   reasoningEffort: string;
 }
 
+export const DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL = "gpt-6-luna";
+
 export const OPENROUTER_CODEX_PROVIDER = {
   name: "OpenRouter",
   base_url: "https://openrouter.ai/api/v1",
@@ -223,6 +225,7 @@ export function scanCyberAccessConfig(
 
 export async function mergedCodexConfig(
   config: CodexSecurityConfig,
+  options: { mode?: "standard" | "deep" } = {},
 ): Promise<JsonObject> {
   if (config.codexOverrides !== undefined && !isObject(config.codexOverrides)) {
     throw new ConfigurationError("codexOverrides must be an object.");
@@ -241,6 +244,10 @@ export async function mergedCodexConfig(
     }
   }
   const defaults: JsonObject = structuredClone(DEFAULT_CODEX_CONFIG);
+  if (options.mode === "deep") {
+    // Keep Standard's established model default separate from bug scans.
+    defaults["model"] = DEFAULT_FUNCTIONAL_BUG_SCAN_MODEL;
+  }
   if (scanModelProvider(overrides) === "amazon-bedrock") {
     // Bedrock models can reject reasoning.summary before the scan starts.
     defaults["model_reasoning_summary"] = "none";

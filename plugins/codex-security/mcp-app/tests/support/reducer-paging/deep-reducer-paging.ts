@@ -244,12 +244,12 @@ if (original.identity.anchor !== prior.identity.anchor) throw new Error('Wrong r
 const findings = [...inputs.discoveries.flatMap(entry => entry.result.findings), ...inputs.previous.findings];
 for (const finding of findings) {
   // The large summary explicitly marks repeated transport padding, not evidence.
-  if (finding.summary.startsWith('BEGIN ISSUE:')) {
-    finding.summary = finding.summary.split('\\n', 1)[0] + '\\n' + finding.summary.slice(finding.summary.lastIndexOf('END ISSUE:'));
+  if (finding.summary.startsWith('BEGIN BUG:')) {
+    finding.summary = finding.summary.split('\\n', 1)[0] + '\\n' + finding.summary.slice(finding.summary.lastIndexOf('END BUG:'));
   }
 }
 const result = await tools.mcp__cs_artifacts__record_codex_security_deep_reduction({
-  scanId: inputs.previous.scanId, findings
+  scanId: inputs.previous.scanId, reviewType: 'functional_bug', findings
 });
 if (result.isError) throw new Error(result.content[0].text);
 text({reductionRecorded: true});

@@ -36,20 +36,23 @@
         "scanId": {
           "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/scanId"
         },
+        "reviewType": {
+          "const": "functional_bug"
+        },
         "handoffClaimToken": {
           "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/handoffClaimToken"
         },
         "scope": {
           "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/scope"
         },
-        "threatModel": {
-          "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/threatModel"
-        },
         "findings": {
           "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/scanDraftInput/properties/findings"
+        },
+        "scanCoverage": {
+          "$ref": "codex-security://schemas/tools/scan-draft.schema.json#/$defs/coverage"
         }
       },
-      "required": ["scanId", "findings"],
+      "required": ["scanId", "reviewType", "findings"],
       "additionalProperties": false
     }
   }

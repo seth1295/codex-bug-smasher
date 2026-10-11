@@ -80,6 +80,11 @@ export async function recordCodexSecurityCandidateAttackPaths(
   operation: "replace";
   rowsWritten: number;
 }> {
+  if (context.mode === "deep") {
+    throw new Error(
+      "Attack-path analysis is unavailable during functional bug scans.",
+    );
+  }
   if (context.layout !== "scan") {
     throw new Error(
       "Candidate attack-path analysis requires a scan-bound artifact context.",

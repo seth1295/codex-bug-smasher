@@ -868,20 +868,8 @@ async function testClaimedParentArtifactOperations(
       "02_discovery",
       "in_scope_files.txt",
     );
-    const ledgerPath = path.join(
-      scanDirectory,
-      "artifacts",
-      "02_discovery",
-      "candidate_ledger.jsonl",
-    );
     const phaseCalls: [string, Record<string, unknown>][] = [
       ["list_codex_security_review_items", { scanId }],
-      ["list_codex_security_candidates", { scanId }],
-      [
-        "record_codex_security_candidate_validations",
-        { scanId, validations: [] },
-      ],
-      ["record_candidate_attack_paths", { scanId, attackPaths: [] }],
     ];
     for (const [name, arguments_] of phaseCalls) {
       requireToolError(
@@ -901,19 +889,19 @@ async function testClaimedParentArtifactOperations(
     assert.equal(delivered.scan.continuationThreadId, ownerThread);
     assert.equal(delivered.scan.handoffClaimToken, undefined);
 
-    for (const [name, arguments_] of [
-      ["prepare_codex_security_review_items", { scanId }],
-      [
-        "record_codex_security_discovery_candidates",
-        { scanId, candidates: [] },
-      ],
-    ] as const) {
-      requireToolError(
-        await call(name, arguments_),
-        /only available for diff scans/,
-        `${name} must not replace Deep discovery artifacts`,
-      );
-    }
+    requireToolError(
+      await call("prepare_codex_security_review_items", { scanId }),
+      /only available for diff scans/,
+      "review-item preparation must not replace Deep discovery artifacts",
+    );
+    requireToolError(
+      await call("record_codex_security_discovery_candidates", {
+        scanId,
+        candidates: [],
+      }),
+      /only available for diff scans/,
+      "discovery candidates must not replace Deep discovery artifacts",
+    );
 
     for (const [name, arguments_] of phaseCalls) {
       requireToolError(
@@ -928,25 +916,9 @@ async function testClaimedParentArtifactOperations(
       );
     }
     await assert.rejects(readFile(inventoryPath, "utf8"), { code: "ENOENT" });
-    await assert.rejects(readFile(ledgerPath, "utf8"), { code: "ENOENT" });
 
     await mkdir(path.dirname(inventoryPath), { recursive: true });
     await writeFile(inventoryPath, "./src/fixture.py\n");
-    const seededCandidate = {
-      candidate_id: "candidate-0123456789abcdef",
-      cwe_ids: ["CWE-89"],
-      locations: [
-        {
-          path: "src/fixture.py",
-          start_line: 1,
-          end_line: 1,
-          role: "sink",
-        },
-      ],
-      summary: "The fixture provides a reachable SQL sink.",
-      evidence: "The first source line contains the reviewed sink.",
-    };
-    await writeFile(ledgerPath, `${JSON.stringify(seededCandidate)}\n`);
 
     const reviewItems = requireSuccessfulTool(
       await call("list_codex_security_review_items", { scanId }),
@@ -963,99 +935,41 @@ async function testClaimedParentArtifactOperations(
     );
     assert.deepEqual(explicitlyListed.items, [{ path: "./src/fixture.py" }]);
 
+    requireToolError(
+      await call("list_codex_security_candidates", { scanId }),
+      /Security candidate ledgers are unavailable during functional bug scans/,
+      "security discovery candidates must stay unavailable in bug mode",
+    );
+
     const originalInventory = await readFile(inventoryPath, "utf8");
-    const listed = requireSuccessfulTool<{ rows: { candidate_id: string }[] }>(
-      await call("list_codex_security_candidates", {
-        scanId,
-      }),
-      "read Deep discovery candidates without a model-visible claim",
-    );
-    assert.equal(listed.rows.length, 1);
-    const candidateId = listed.rows[0].candidate_id;
-
-    const validated = requireSuccessfulTool(
-      await call("record_codex_security_candidate_validations", {
-        scanId,
-        validations: [
-          {
-            candidateId,
-            validation: {
-              disposition: "reportable",
-              method: "Static source-to-sink trace.",
-              confidence: "high",
-              confidence_rationale:
-                "The vulnerable code path is directly visible.",
-              rubric: ["The source is attacker-controlled."],
-              evidence: ["The source line directly reaches the sink."],
-              counterevidence_or_proof_gap: "No effective control was found.",
-              remaining_uncertainty: "",
-            },
-          },
-        ],
-      }),
-      "validate claimed parent candidates without a model-visible claim",
-    );
-    assert.deepEqual(validated, {
-      kind: "candidate_validations",
-      operation: "replace",
-      rowsWritten: 1,
-    });
-
-    const attacked = requireSuccessfulTool(
-      await call("record_candidate_attack_paths", {
-        scanId,
-        attackPaths: [
-          {
-            candidateId,
-            attackPath: {
-              decision: "reportable",
-              dataflow: "Request input reaches the SQL sink.",
-              reachability: "The handler is reachable.",
-              counterevidence: "No effective control was found.",
-              impact: "high",
-              likelihood: "medium",
-              severity: "high",
-              severity_rationale: "The sink accepts attacker-controlled input.",
-              change_conditions: "Parameterized queries remove the issue.",
-            },
-          },
-        ],
-      }),
-      "record claimed parent attack paths without a model-visible claim",
-    );
-    assert.deepEqual(attacked, {
-      kind: "candidate_attack_paths",
-      operation: "replace",
-      rowsWritten: 1,
-    });
-
-    const originalLedger = await readFile(ledgerPath, "utf8");
     for (const [name, arguments_] of phaseCalls) {
       requireToolError(
         await call(name, arguments_, otherThread),
         /requires its current continuation claim/,
         `${name} from a different continuation thread`,
       );
-      assert.equal(await readFile(ledgerPath, "utf8"), originalLedger);
       assert.equal(await readFile(inventoryPath, "utf8"), originalInventory);
     }
 
-    execFileSync(process.env.PYTHON ?? "python3", [
-      "-c",
-      "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); " +
-        "c.execute('UPDATE scans SET handoff_claim_token = ? WHERE id = ?', " +
-        "(sys.argv[2],sys.argv[3])); c.commit(); c.close()",
-      path.join(environment.CODEX_SECURITY_STATE_DIR, "workbench.sqlite3"),
-      randomUUID(),
-      scanId,
-    ]);
+    execFileSync(
+      process.env.PYTHON?.trim() ||
+        (process.platform === "win32" ? "python" : "python3"),
+      [
+        "-c",
+        "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); " +
+          "c.execute('UPDATE scans SET handoff_claim_token = ? WHERE id = ?', " +
+          "(sys.argv[2],sys.argv[3])); c.commit(); c.close()",
+        path.join(environment.CODEX_SECURITY_STATE_DIR, "workbench.sqlite3"),
+        randomUUID(),
+        scanId,
+      ],
+    );
     for (const [name, arguments_] of phaseCalls) {
       requireToolError(
         await call(name, arguments_),
         /owned by a different continuation/,
         `${name} after continuation claim rotation`,
       );
-      assert.equal(await readFile(ledgerPath, "utf8"), originalLedger);
       assert.equal(await readFile(inventoryPath, "utf8"), originalInventory);
     }
   } finally {
@@ -1179,7 +1093,7 @@ async function testParentToolList(bundle: string) {
     }
 
     const deepScanTool = tools.find(
-      (tool) => tool.name === "start_codex_security_deep_scan",
+      (tool) => tool.name === "start_codex_functional_bug_scan",
     );
     assert.ok(
       deepScanTool,
@@ -1211,7 +1125,7 @@ async function testParentToolList(bundle: string) {
             "codex/sandbox-state-meta": sandboxState,
           },
         }),
-        /Codex Security scan not found/,
+        /Functional bug scan discovery did not start or rejoin/,
         "Empty optional Deep Scan context must not override persisted scan authority.",
       );
     }
@@ -1411,6 +1325,7 @@ async function testReducerWorkerToolList(bundle: string) {
   const previousReducerResultPath = path.join(previousRoot, "result.json");
   await writeJson(workerResultPath, {
     scanId,
+    reviewType: "functional_bug",
     findings: [workerFinding],
     coverage: {
       completeness: "complete",
@@ -1421,6 +1336,7 @@ async function testReducerWorkerToolList(bundle: string) {
   });
   await writeJson(previousReducerResultPath, {
     scanId,
+    reviewType: "functional_bug",
     findings: [previousFinding],
   });
 
@@ -1464,7 +1380,11 @@ async function testReducerWorkerToolList(bundle: string) {
         `${tool.name} must expose scanId only when submitting its complete reduction.`,
       );
       if (tool.name === "record_codex_security_deep_reduction") {
-        assert.deepEqual(tool.inputSchema.required, ["scanId", "findings"]);
+        assert.deepEqual(tool.inputSchema.required, [
+          "scanId",
+          "reviewType",
+          "findings",
+        ]);
         assert.equal(tool.inputSchema.additionalProperties, false);
         assert.equal(
           Object.hasOwn(tool.inputSchema.properties!, "coverage"),

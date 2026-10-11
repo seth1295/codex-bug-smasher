@@ -37,6 +37,7 @@ import {
   resolveDeepWorkerParentSandbox,
   type DeepWorkerParentSandbox,
 } from "./src/deep-scan/parent-sandbox.js";
+import { resolveDeepScanSourceReadRoots } from "./src/deep-scan/source-read-roots.js";
 import { WorkbenchDeepScanStore } from "./src/deep-scan/store.js";
 import type { DeepScanRunState } from "./src/deep-scan/types.js";
 
@@ -224,7 +225,7 @@ const startPromptOnlyScanSchema = {
   mode: z
     .enum(["diff", "standard"])
     .describe(
-      "Prompt-driven scan mode. Deep Scan uses start_codex_security_deep_scan instead.",
+      "Prompt-driven scan mode. Deep Scan uses start_codex_functional_bug_scan instead.",
     ),
   scope: z
     .string()
@@ -382,7 +383,7 @@ const startDeepScanSchema = {
     .max(4096)
     .optional()
     .describe(
-      "Scope inside targetPath. Deep Scan currently requires the whole target.",
+      "Scope inside targetPath. Deep Bug Scan currently requires the whole target.",
     ),
   userContext: editableUserContextSchema
     .optional()
@@ -776,7 +777,7 @@ export function createCodexSecurityServer(): McpServer {
     {
       title: "Start Codex Security Prompt-Only Scan",
       description:
-        "Start or rejoin a Standard or diff Codex Security scan from its owning conversation. Use the returned authoritative scanId and scanDir. Standard and diff scans save progress checkpoints before their final semantic draft; the workbench writes the unsealed canonical artifacts. Complete the same scan once. Deep Scan uses start_codex_security_deep_scan instead.",
+        "Start or rejoin a Standard or diff Codex Security scan from its owning conversation. Use the returned authoritative scanId and scanDir. Standard and diff scans save progress checkpoints before their final semantic draft; the workbench writes the unsealed canonical artifacts. Complete the same scan once. Deep Scan uses start_codex_functional_bug_scan instead.",
       inputSchema: startPromptOnlyScanSchema,
       annotations: writingAnnotations,
       _meta: modelActionMeta,
@@ -1062,11 +1063,11 @@ export function createCodexSecurityServer(): McpServer {
   );
 
   server.registerTool(
-    "start_codex_security_deep_scan",
+    "start_codex_functional_bug_scan",
     {
-      title: "Start or Join Codex Security Deep Scan",
+      title: "Start or Join Deep Bug Scan",
       description:
-        "Run or rejoin independent Standard security scans and semantically merge their validated findings. Pass scanId and its handoffClaimToken to resume, or targetPath to start headlessly. The call blocks until the aggregate draft is ready, fails, or is canceled. On success, use the returned scanId and scanDir; manifestPath identifies the canonical parent scan-manifest.json. Call complete_codex_security_scan once.",
+        "Run or rejoin a resumable functional bug scan with independent discovery workers, validation evidence, source coverage, and deduplication. Pass scanId and its handoffClaimToken to resume, or targetPath to start headlessly. The call blocks until the aggregate draft is ready, fails, or is canceled. On success, use the returned scanId and scanDir; manifestPath identifies the canonical parent scan-manifest.json. Call complete_codex_security_scan once.",
       inputSchema: startDeepScanSchema,
       annotations: writingAnnotations,
       _meta: modelActionMeta,
@@ -1080,7 +1081,7 @@ export function createCodexSecurityServer(): McpServer {
       const normalizedUserContext = userContext || undefined;
       if (hasScanId === hasTarget) {
         return toolErrorResult(
-          "Pass exactly one Deep Scan identity: either scanId, or targetPath for a first terminal/headless call.",
+          "Pass exactly one Deep Bug Scan identity: either scanId, or targetPath for a first terminal/headless call.",
         );
       }
       if (
@@ -1093,18 +1094,18 @@ export function createCodexSecurityServer(): McpServer {
       }
       if (hasTarget && !wholeTargetScope(scope, targetPath)) {
         return toolErrorResult(
-          "Deep Scan currently requires the whole target; use scope '.'.",
+          "Deep Bug Scan currently requires the whole target; use scope '.'.",
         );
       }
       if (hasTarget && handoffClaimToken !== undefined) {
         return toolErrorResult(
-          "handoffClaimToken is only valid with an existing Deep Scan ID.",
+          "handoffClaimToken is only valid with an existing Deep Bug Scan ID.",
         );
       }
       const threadId = threadIdFromExtra(extra);
       if (!threadId) {
         return toolErrorResult(
-          "Starting or joining a Deep Scan requires the owning Codex thread context.",
+          "Starting or joining a Deep Bug Scan requires the owning Codex thread context.",
         );
       }
       const modelSettings = codexModelSettingsFromExtra(extra);
@@ -1134,6 +1135,19 @@ export function createCodexSecurityServer(): McpServer {
           }
           const immediate = deepScanTerminalResult(begun);
           if (immediate) return { begun, immediate };
+          let sourceReadRoots: string[] = [];
+          let sourceReadRootsError: string | undefined;
+          try {
+            sourceReadRoots = await resolveDeepScanSourceReadRoots({
+              repoRoot: begun.targetPath,
+              sourceReadPaths: begun.sourceReadPaths,
+            });
+          } catch (error: unknown) {
+            sourceReadRootsError =
+              error instanceof Error
+                ? error.message
+                : "Deep Scan could not establish the selected source read scope.";
+          }
           const started = await startOrJoinDeepScanCoordinator({
             run: begun,
             registry: deepScanCoordinators,
@@ -1145,6 +1159,10 @@ export function createCodexSecurityServer(): McpServer {
                 artifactContext: {
                   pluginRoot: PLUGIN_ROOT,
                   repoRoot: begun.targetPath,
+                  sourceReadRoots,
+                  ...(sourceReadRootsError === undefined
+                    ? {}
+                    : { sourceReadRootsError }),
                   scanId: begun.scanId,
                   scope: begun.scope,
                   pythonCommand: await resolvePythonCommand(),
@@ -1216,7 +1234,7 @@ export function createCodexSecurityServer(): McpServer {
         return toolErrorResult(
           deepScanInvocationFailureMessage(
             new Error(
-              `Deep Scan ${terminal.scanId} ended without a terminal result.`,
+              `Deep Bug Scan ${terminal.scanId} ended without a terminal result.`,
             ),
           ),
         );
@@ -2314,7 +2332,7 @@ function boundedErrorData(error: unknown): { message: string; name: string } {
 function deepScanTerminalResult(run: DeepScanRunState) {
   if (run.status === "succeeded") {
     if (!run.manifestPath) return undefined;
-    const instructions = `Deep Scan discovery completed. Independent Standard scans have already performed validation and attack-path analysis and have been consolidated into the canonical scan-manifest.json, findings.json, and coverage.json under ${run.scanDir}. The returned manifestPath is the canonical scan-manifest.json, not a legacy discovery manifest. Any instructions requiring parent candidate listing, centralized validation, attack-path analysis, or another draft apply only to the old discovery-only workflow and must be skipped. The authoritative scan ID is ${run.scanId}. Immediately call complete_codex_security_scan once using that scan ID to seal and publish the scan. Return output only after completion succeeds and generated report.md exists. If completion fails, surface that exact error and return no final, no-findings, structured, or benchmark response.`;
+    const instructions = `Deep Bug Scan workers have completed functional correctness review, preserved validation evidence and unresolved hypotheses, and deduplicated their results into canonical scan-manifest.json, findings.json, and coverage.json under ${run.scanDir}. The returned manifestPath is the canonical parent scan-manifest.json. Do not run another analysis or submit another draft. The authoritative scan ID is ${run.scanId}. Immediately call complete_codex_security_scan once using that scan ID to seal and publish the scan. Return output only after completion succeeds and generated report.md exists. If completion fails, surface that exact error and return no final, no-findings, structured, or benchmark response.`;
     return {
       content: [{ type: "text" as const, text: instructions }],
       structuredContent: {
@@ -2327,7 +2345,7 @@ function deepScanTerminalResult(run: DeepScanRunState) {
   }
   if (run.status === "canceled") {
     if (run.error?.trim()) return toolErrorResult(deepScanFailureMessage(run));
-    const instructions = `Deep Scan ${run.scanId} was canceled. Saved findings and pending candidates remain available in the scan's retained results. Do not start additional scan work or claim complete coverage.`;
+    const instructions = `Deep Bug Scan ${run.scanId} was canceled. Saved bug findings and deferred hypotheses remain available in the retained results. Do not start additional scan work or claim complete coverage.`;
     return {
       content: [{ type: "text" as const, text: instructions }],
       structuredContent: {
@@ -2655,26 +2673,26 @@ function completionFailureMessage(error: unknown): string {
 
 function deepScanInvocationFailureMessage(error: unknown): string {
   return [
-    "Codex Security Deep Scan discovery did not start or rejoin.",
+    "Functional bug scan discovery did not start or rejoin.",
     failureDiagnostic(error),
     "Stop the current response and surface this exact MCP error.",
-    "Do not call start_codex_security_deep_scan again in this response.",
+    "Do not call start_codex_functional_bug_scan again in this response.",
     "Do not call get_codex_security_scan_context in this response.",
     "Do not call complete_codex_security_scan in this response.",
-    "Do not start a replacement Deep Scan, call cancel, return a final or no-findings result, satisfy a structured output schema, or emit benchmark JSON.",
+    "Do not start a replacement Deep Bug Scan, call cancel, return a final or no-findings result, satisfy a structured output schema, or emit benchmark JSON.",
   ].join("\n");
 }
 
 function deepScanFailureMessage(run: DeepScanRunState): string {
   return [
-    `${run.error ?? `Deep Scan ${run.scanId} ${run.status}.`}${
+    `${run.error ?? `Deep Bug Scan ${run.scanId} ${run.status}.`}${
       run.manifestPath ? ` Failure manifest: ${run.manifestPath}.` : ""
     }`,
-    "This is a terminal failure of this logical Deep Scan; no successful discovery manifest was returned.",
+    "This is a terminal failure of this logical Deep Bug Scan; no successful discovery manifest was returned.",
     "Stop further scanning and surface this exact stable MCP failure. Read the existing scan context to report saved findings and pending candidates separately, with incomplete coverage.",
-    "Do not call start_codex_security_deep_scan again in this response.",
+    "Do not call start_codex_functional_bug_scan again in this response.",
     "Do not call complete_codex_security_scan in this response.",
-    "Do not start a replacement Deep Scan, call cancel for this terminal scan, claim a successful or no-findings scan, satisfy a successful-scan output schema, or emit benchmark JSON.",
+    "Do not start a replacement Deep Bug Scan, call cancel for this terminal scan, claim a successful or no-findings scan, satisfy a successful-scan output schema, or emit benchmark JSON.",
   ].join("\n");
 }
 

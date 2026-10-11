@@ -5,6 +5,7 @@ import { finding, scanId, workerDraft } from "./scan-draft-fixture.ts";
 import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importSource } from "./import-module.ts";
 
 type Finding = ReturnType<typeof finding>;
@@ -15,7 +16,7 @@ const {
   getCodexSecurityDeepReducerInputs,
   recordCodexSecurityDeepReduction,
 } = await importSource(
-  new URL("../src/artifact-deep-reducer.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-deep-reducer.ts", import.meta.url)),
 );
 
 const validReduction = reduction([]);
@@ -52,7 +53,7 @@ assert.equal(
   false,
 );
 
-const root = await temporaryDirectory("codex-security-deep-reducer-", true);
+const root = await temporaryDirectory("functional-bug-deep-reducer-", true);
 try {
   const scanRoot = path.join(root, "scan");
   const workersRoot = path.join(
@@ -69,15 +70,15 @@ try {
     completeness: "partial",
     surfaces: [
       {
-        label: "SQL route",
+        label: "Payment calculation",
         disposition: "rejected",
-        notes: "Parameterized queries prevent injection.",
+        notes: "The cents rounding rule matches the documented result.",
         receiptRefs: ["artifacts/missing-worker-receipt.md"],
       },
       {
-        label: "Archive upload",
+        label: "Batch import",
         disposition: "needs_follow_up",
-        notes: "The guard still needs review.",
+        notes: "The alternate parser still needs review.",
       },
     ],
     explicitExclusions: [
@@ -85,19 +86,18 @@ try {
     ],
     deferred: [
       {
-        candidateId: "candidate-upload",
-        reason: "Review the guard.",
-        paths: ["src/upload.ts"],
+        candidateId: "candidate-import",
+        reason: "Check whether the alternate parser truncates early.",
+        paths: ["src/import.ts"],
       },
     ],
-    openQuestions: ["Does the alternate upload handler use the guard?"],
+    openQuestions: ["Does the alternate parser apply the same rounding rule?"],
   };
   const first = await createWorker({
     workersRoot,
     label: "discovery-0001",
     id: "worker-001",
     result: workerDraft([shared], {
-      threatModel: { summary: "Requests may reach shared code." },
       coverage: rejectedCoverage,
     }),
   });
@@ -157,14 +157,21 @@ try {
       context,
       reduction(
         [
-          { ...shared, validation: { evidenceRefs: ["missing-evidence"] } },
+          {
+            ...shared,
+            validation: {
+              status: "hypothesis",
+              method: "The source path was not verified.",
+              evidence: ["The suspected call path is incomplete."],
+            },
+          },
           independent,
         ],
         { complete: true },
       ),
     ),
-    /evidenceRefs must refer/,
-    "live reducer submissions reject unknown evidence references instead of silently removing them",
+    /validated/,
+    "the reducer cannot promote an unresolved hypothesis into a confirmed bug",
   );
   assert.deepEqual(inputs, {
     discoveries: [
@@ -186,16 +193,45 @@ try {
   );
   await assert.rejects(
     recordCodexSecurityDeepReduction(context, reduction([])),
-    /discarded every accepted Standard scan finding/,
+    /discarded every accepted bug finding/,
   );
 
   const merged = reduction([shared, independent], {
-    threatModel: { summary: "Requests reach shared and independent code." },
     scope: { summary: "Shared and independent request handling." },
   });
   const outcome = await recordCodexSecurityDeepReduction(context, merged);
   const mergedWithSources = {
     ...merged,
+    scanCoverage: {
+      completeness: "partial",
+      surfaces: [
+        {
+          label: "Payment calculation",
+          disposition: "rejected",
+          notes: "The cents rounding rule matches the documented result.",
+          receiptRefs: ["artifacts/missing-worker-receipt.md"],
+          sourceWorkerIds: [first.id],
+        },
+        {
+          label: "Batch import",
+          disposition: "needs_follow_up",
+          notes: "The alternate parser still needs review.",
+          sourceWorkerIds: [first.id],
+        },
+      ],
+      explicitExclusions: [
+        { pattern: "vendor", reason: "Outside the requested source scope." },
+      ],
+      deferred: [
+        {
+          candidateId: "candidate-import",
+          reason: "Check whether the alternate parser truncates early.",
+          paths: ["src/import.ts"],
+          sourceWorkerIds: [first.id],
+        },
+      ],
+      openQuestions: ["Does the alternate parser apply the same rounding rule?"],
+    },
     findings: [
       retainedFinding(shared, [
         { id: "worker-001:0", finding: shared },
@@ -219,7 +255,7 @@ try {
   assert.deepEqual(
     await readJson(outputRoot, "checkpoints", checkpointNames[0]),
     mergedWithSources,
-    "reducer checkpoints retain the accepted findings and scope without coverage",
+    "reducer checkpoints retain accepted findings, scope, and source coverage",
   );
 
   assert.deepEqual(
@@ -227,7 +263,7 @@ try {
       [first, second].map((worker) => readFile(worker.resultPath, "utf8")),
     ),
     originalWorkerArtifacts,
-    "reduction must not rewrite raw Standard worker coverage evidence",
+    "reduction must not rewrite raw discovery worker coverage evidence",
   );
 
   const collision = {
@@ -351,9 +387,13 @@ try {
 
   const enrichedPrevious = structuredClone(mergedWithSources);
   enrichedPrevious.findings[0].summary =
-    "The earlier reduction established an additional reachable output route.";
+    "The earlier reduction established another input path to the incorrect result.";
   enrichedPrevious.findings[0].validation = {
-    summary: "Both output routes bypass the same encoding control.",
+    status: "validated",
+    method: "A focused reproduction exercised both input paths.",
+    evidence: ["Both paths returned the same incorrect result."],
+    reproduction: ["Call the input that reaches either path."],
+    counterEvidence: ["The safe implementation returned the expected value."],
   };
   for (const legacyCoverage of [
     rejectedCoverage,
@@ -431,14 +471,14 @@ try {
       ...context,
       deepReducer: { ...context.deepReducer, claimedWorkers: [first, first] },
     }),
-    /repeats assigned Standard scan worker/,
+    /repeats assigned discovery worker/,
   );
 
   await writeJson(first.resultPath, { ...first.result, complete: false });
   await assert.rejects(
     getCodexSecurityDeepReducerInputs(context),
     /only a checkpoint/,
-    "unfinished Standard worker results are not reducer inputs",
+    "unfinished discovery worker results are not reducer inputs",
   );
 
   for (const invalidCoverage of [
@@ -452,11 +492,11 @@ try {
     await assert.rejects(
       getCodexSecurityDeepReducerInputs(context),
       /coverage|completeness/,
-      "Standard worker coverage remains required and validated before projection",
+      "discovery worker coverage remains required and validated before projection",
     );
   }
 
-  await writeFile(first.resultPath, "{invalid Standard scan\n");
+  await writeFile(first.resultPath, "{invalid functional bug scan\n");
   await assert.rejects(
     getCodexSecurityDeepReducerInputs(context),
     (error: Error) =>
@@ -501,13 +541,29 @@ async function createWorker({
 }
 
 function reduction(findings: Record<string, unknown>[], extra = {}) {
-  return { scanId, findings, ...extra };
+  return { scanId, reviewType: "functional_bug", findings, ...extra };
 }
 
 function withSourceRefs(worker: Awaited<ReturnType<typeof createWorker>>) {
-  const { coverage: _coverage, ...result } = worker.result;
+  const { coverage, ...result } = worker.result;
+  const scanCoverage = structuredClone(coverage) as {
+    completeness: string;
+    surfaces: Record<string, unknown>[];
+    explicitExclusions: Record<string, unknown>[];
+    deferred: Record<string, unknown>[];
+    openQuestions?: unknown[];
+  };
+  scanCoverage.surfaces = scanCoverage.surfaces.map((surface) => ({
+    ...surface,
+    sourceWorkerIds: [worker.id],
+  }));
+  scanCoverage.deferred = scanCoverage.deferred.map((candidate) => ({
+    ...candidate,
+    sourceWorkerIds: [worker.id],
+  }));
   return {
     ...result,
+    scanCoverage,
     findings: worker.result.findings.map(sourceReferences(worker)),
   };
 }

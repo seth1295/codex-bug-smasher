@@ -137,7 +137,7 @@ model_reasoning_summary = "none"
       2,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         {
           targetPath,
           scope: ".",
@@ -160,7 +160,7 @@ model_reasoning_summary = "none"
       3,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         {
           targetPath,
           scope: ".",
@@ -187,7 +187,7 @@ model_reasoning_summary = "none"
       10,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         { targetPath, scope: ".", userContext: "stdio lifecycle fixture" },
         threadId,
         { model: "gpt-5.5", reasoning_effort: "xhigh" },
@@ -295,12 +295,12 @@ model_reasoning_summary = "none"
     server.sendRequest(
       11,
       "tools/call",
-      toolCall("start_codex_security_deep_scan", { scanId }, threadId),
+      toolCall("start_codex_functional_bug_scan", { scanId }, threadId),
     );
     server.sendRequest(
       12,
       "tools/call",
-      toolCall("start_codex_security_deep_scan", { scanId }, threadId),
+      toolCall("start_codex_functional_bug_scan", { scanId }, threadId),
     );
     await waitFor(
       () =>
@@ -427,7 +427,7 @@ model_reasoning_summary = "none"
     const lateJoin = await server.request(
       14,
       "tools/call",
-      toolCall("start_codex_security_deep_scan", { scanId }, threadId),
+      toolCall("start_codex_functional_bug_scan", { scanId }, threadId),
     );
     assertCanceled(lateJoin, scanId, startedState.scanDir);
     assert.equal((await readLogLines(startLogPath)).length, 1);
@@ -437,7 +437,7 @@ model_reasoning_summary = "none"
       20,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         {
           targetPath: failedTargetPath,
           scope: ".",
@@ -579,7 +579,7 @@ model_reasoning_summary = "none"
       22,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         { scanId: failedScanId },
         failureThreadId,
       ),
@@ -601,7 +601,7 @@ model_reasoning_summary = "none"
     assert.equal(
       toolList.result.tools.some(
         (tool: { name: string }) =>
-          tool.name === "start_codex_security_deep_scan",
+          tool.name === "start_codex_functional_bug_scan",
       ),
       true,
       "the MCP server must remain responsive after canceling one scan",
@@ -673,7 +673,7 @@ model_reasoning_summary = "none"
       29,
       "tools/call",
       toolCall(
-        "start_codex_security_deep_scan",
+        "start_codex_functional_bug_scan",
         { scanId: resumedScanId, handoffClaimToken },
         resumedThreadId,
       ),
@@ -773,7 +773,7 @@ model_reasoning_summary = "none"
         2,
         "tools/call",
         toolCall(
-          "start_codex_security_deep_scan",
+          "start_codex_functional_bug_scan",
           { scanId: resumedScanId, handoffClaimToken },
           resumedThreadId,
         ),

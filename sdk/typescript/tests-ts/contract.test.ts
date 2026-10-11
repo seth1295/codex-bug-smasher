@@ -1,4 +1,5 @@
 import { setFindingIdentity, sha256 } from "./support/finding-identity.js";
+import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
   chmod,
@@ -11,7 +12,7 @@ import {
   type FileHandle,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, test, mock } from "bun:test";
 import fc from "fast-check";
 import { ContractValidationError, loadContract } from "../src/index.js";
@@ -24,6 +25,10 @@ import { createApiTestFixtures } from "./support/temporary-directories.js";
 import { readJson as readJsonFile, writeJson } from "./support/json.js";
 
 const EXAMPLE = join(PLUGIN_ROOT, "examples", "completed-scan");
+const BUG_PLUGIN_ROOT = resolve(
+  import.meta.dirname,
+  "../../../plugins/codex-security",
+);
 const { temporaryDirectory, cleanup } = createApiTestFixtures(
   "codex-security-contract-",
   false,
@@ -77,6 +82,138 @@ function expectation(
 }
 
 describe("canonical scan contract", () => {
+  test("loads the functional bug contract with priority and hypotheses", async () => {
+    const scanDir = await temporaryDirectory();
+    const scanId = "bug_scan_contract_001";
+    const targetId = "synthetic-invoice-target";
+    const material = [
+      "functional-bug/v1",
+      targetId,
+      "invoice.proration.integer-order",
+      "invoice-proration-integer-order",
+      "",
+    ].join("\0");
+    const fingerprint = `functional-bug/v1:sha256:${createHash("sha256").update(material).digest("hex")}`;
+    const finding = {
+      findingId: `bug_${createHash("sha256").update(fingerprint).digest("hex").slice(0, 24)}`,
+      occurrenceId: `occ_${createHash("sha256").update([scanId, fingerprint].join("\0")).digest("hex").slice(0, 24)}`,
+      ruleId: "invoice.proration.integer-order",
+      identity: { anchor: "invoice-proration-integer-order" },
+      fingerprints: { algorithm: "functional-bug/v1", primary: fingerprint },
+      title: "Proration truncates its ratio before applying the amount",
+      summary:
+        "The function returns an incorrect amount for fractional ratios.",
+      priority: "P1",
+      category: "algorithm",
+      confidence: {
+        level: "high",
+        rationale:
+          "A deterministic reproduction demonstrates the wrong result.",
+      },
+      locations: [{ path: "src/invoice.mjs", startLine: 3 }],
+      expected: "500 cents at two fifths returns 200 cents.",
+      actual: "The function returns 0 cents.",
+      impact: "Invoice adjustments can undercharge a customer.",
+      validation: {
+        status: "validated",
+        method: "A deterministic function reproduction.",
+        evidence: ["The function returned 0 instead of 200."],
+        reproduction: ["Call prorateCents(500, 2, 5)."],
+        counterEvidence: ["A safe sibling implementation returns 200."],
+      },
+      suggestedCorrection:
+        "Multiply before dividing using the documented rounding rule.",
+      tests: ["Add a regression test for a fractional ratio."],
+      provenance: { source: "local_plugin", sourceFindingIds: ["worker-1:0"] },
+    };
+    const hypothesis = {
+      id: "possible-overwrite",
+      candidate: { title: "Possible concurrent overwrite" },
+      reason: "A concurrent call ordering could not be proven.",
+    };
+    const findings = {
+      documentType: "functional-bug-scan.findings",
+      schemaVersion: "1.0",
+      scanId,
+      findings: [finding],
+      hypotheses: [hypothesis],
+    };
+    const coverage = {
+      documentType: "functional-bug-scan.coverage",
+      schemaVersion: "1.0",
+      scanId,
+      mode: "deep_repository",
+      completeness: "partial",
+      inventoryStrategy: "repository",
+      includePaths: ["src/"],
+      excludePaths: [],
+      reviewedAreas: [
+        {
+          label: "Invoice arithmetic",
+          disposition: "reviewed",
+          sourceWorkerIds: ["worker-1", "worker-2"],
+        },
+      ],
+      explicitExclusions: [],
+      deferred: [hypothesis],
+    };
+    const findingsBytes = Buffer.from(JSON.stringify(findings));
+    const coverageBytes = Buffer.from(JSON.stringify(coverage));
+    const manifest = {
+      documentType: "functional-bug-scan.scan-manifest",
+      schemaVersion: "1.0",
+      scan: {
+        id: scanId,
+        producer: { name: "functional-bug-scan-plugin", version: "0.1.160" },
+        status: "completed",
+        startedAt: "2026-10-09T00:00:00Z",
+        completedAt: "2026-10-09T00:05:00Z",
+        sealedAt: "2026-10-09T00:05:00Z",
+        reviewType: "functional_bug",
+        target: {
+          kind: "directory_snapshot",
+          targetId,
+          displayName: "invoice-fixture",
+          snapshotDigest: `codex-security-snapshot/v1:sha256:${"1".repeat(64)}`,
+        },
+        scope: { includePaths: ["src/"], excludePaths: [] },
+        coverageRef: "coverage.json",
+        findingsRef: "findings.json",
+        artifacts: [
+          {
+            path: "findings.json",
+            sha256: sha256(findingsBytes),
+            mediaType: "application/json",
+          },
+          {
+            path: "coverage.json",
+            sha256: sha256(coverageBytes),
+            mediaType: "application/json",
+          },
+        ],
+      },
+    };
+    await Promise.all([
+      writeJson(join(scanDir, "scan-manifest.json"), manifest),
+      writeFile(join(scanDir, "findings.json"), findingsBytes),
+      writeFile(join(scanDir, "coverage.json"), coverageBytes),
+    ]);
+
+    const loaded = await loadContract(scanDir, { pluginRoot: BUG_PLUGIN_ROOT });
+
+    expect(loaded.bugManifest?.scan.reviewType).toBe("functional_bug");
+    expect(loaded.bugFindings?.findings[0]?.priority).toBe("P1");
+    expect(loaded.bugFindings?.hypotheses).toEqual([hypothesis]);
+    expect(loaded.bugCoverage?.reviewedAreas[0]?.sourceWorkerIds).toEqual([
+      "worker-1",
+      "worker-2",
+    ]);
+    expect(loaded.findings.findings).toEqual([]);
+    expect(loaded.bugFindings?.findings[0]).not.toHaveProperty("severity");
+    expect(loaded.bugFindings?.findings[0]).not.toHaveProperty("taxonomy");
+    expect(loaded.bugFindings?.findings[0]).not.toHaveProperty("attackPath");
+  });
+
   test("rejects byte changes to any sealed binary artifact", async () => {
     const scanDir = await copyExample();
     const artifactPath = join(scanDir, "artifacts", "synthetic.bin");

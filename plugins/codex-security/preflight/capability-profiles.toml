@@ -65,8 +65,8 @@ capability = "usable_worker_slots_6"
 severity = "warn"
 reason = "A six-thread cap provides room for an independent baseline and parallel investigators; it does not require six running workers."
 
-[profiles.deep_security_scan]
-description = "Capabilities for deep repository-wide Codex Security scans."
+[profiles.functional_bug_scan]
+description = "Capabilities for resumable functional bug scans."
 requirements = []
 
 [profiles.security_diff_scan.remediation]
@@ -85,5 +85,5 @@ skill = "security-scan"
 profile = "security_scan"
 
 [[routes]]
-skill = "deep-security-scan"
-profile = "deep_security_scan"
+skill = "deep-bug-scan"
+profile = "functional_bug_scan"

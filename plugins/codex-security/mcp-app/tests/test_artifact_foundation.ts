@@ -12,16 +12,17 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importSource } from "./import-module.ts";
 
 const io = await importSource(
-  new URL("../src/artifact-io.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-io.ts", import.meta.url)),
 );
 const contextApi = await importSource(
-  new URL("../src/artifact-context.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-context.ts", import.meta.url)),
 );
 const writerApi = await importSource(
-  new URL("../artifact-writer-main.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../artifact-writer-main.ts", import.meta.url)),
   {
     plugins: [
       {
@@ -38,7 +39,7 @@ const writerApi = await importSource(
   },
 );
 const schemas = await importSource(
-  new URL("../src/artifact-schema-loader.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/artifact-schema-loader.ts", import.meta.url)),
 );
 const fixture = await realpath(
   await mkdtemp(path.join(tmpdir(), "codex-security-artifact-foundation-")),

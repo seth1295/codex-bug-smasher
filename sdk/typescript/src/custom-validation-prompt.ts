@@ -19,7 +19,7 @@ const SOURCES = {
 const DISABLED_TOOLS = [
   "start_codex_security_standard_scan",
   "start_codex_security_prompt_only_scan",
-  "start_codex_security_deep_scan",
+  "start_codex_functional_bug_scan",
   "complete_codex_security_scan",
   "record_codex_security_candidate_validations",
   "record_candidate_attack_paths",

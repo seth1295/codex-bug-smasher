@@ -1,38 +1,45 @@
-# Codex Security
+# Codex Bug Smasher
 
-`@openai/codex-security` is a CLI and TypeScript SDK for finding, validating, and
-fixing security vulnerabilities in your code.
+This fork adds a resumable functional bug scan to the CLI and TypeScript SDK.
+It investigates ordinary correctness defects, validates evidence, and writes
+Markdown and JSON reports without changing source files. The existing Standard
+security scan remains available separately.
 
 ## Features
 
-- Scan repositories, selected paths, or Git changes. Deep scans run parallel
-  discovery workers on repositories and selected paths.
-- Validate candidate findings, generate patches, and verify existing fixes.
-- Draft `SECURITY.md` policies and save threat models for later review.
-- Browse saved scans and findings, identify duplicates, assess severity against
-  your own rubric, and suggest owners from source and Git history.
-- Import GitHub code scanning alerts, export SARIF, JSON, or CSV, and publish
-  findings to Linear or a findings service.
-- Automate scans across repositories or project components, including in CI and
-  containers.
+- Deep-scan repositories and selected paths with two independent discovery
+  workers and one investigator subagent per worker by default.
+- Find bugs in algorithms, error handling, data integrity, state transitions,
+  API contracts, concurrency, and numerical edge cases.
+- Keep validated bugs separate from hypotheses that still need proof; assign
+  every confirmed bug a P0-P3 priority and a distinct confidence level.
+- Resume saved scans and retain source coverage, validation evidence, and
+  deduplication provenance.
 
 ## Quick start
 
-Requires Node.js 22.13.0+ within 22.x, or Node.js 24.x or 26.x, and Python 3.10+.
-Python 3.10 also requires `tomli`.
+Requires Node.js 22.13.0+ within 22.x, or Node.js 24.x or 26.x, Python
+3.10+, and Rust 1.97.1 with Cargo to build the local plugin runtime. Python
+3.10 also requires `tomli`.
+
+This fork is distributed as source today; it is not published as
+`@openai/codex-security`. Run these commands from the repository root to build
+and use the checked-out CLI:
 
 ```bash
-npm install @openai/codex-security
-npx @openai/codex-security login
-npx @openai/codex-security scan /path/to/repository
+corepack pnpm --dir sdk/typescript install --frozen-lockfile
+corepack pnpm --dir plugins/codex-security/mcp-app install --frozen-lockfile
+node plugins/codex-security/mcp-app/scripts/build_native.mjs
+node plugins/codex-security/mcp-app/scripts/build_mcp_app.mjs --output plugins/codex-security/mcp --native host
+corepack pnpm --dir sdk/typescript run build
+node sdk/typescript/bin/codex-security.mjs login
+node sdk/typescript/bin/codex-security.mjs scan /path/to/repository --mode deep --plugin-path plugins/codex-security
 ```
 
-For CI, set `OPENAI_API_KEY` or `CODEX_API_KEY` in the scan process's environment.
-On remote or headless machines, use `login --device-auth` if your workspace
-allows it, or [sign in over SSH](sdk/typescript/README.md#remote-login-with-ssh-forwarding).
-
-Some cybersecurity requests and protected findings require
-[Trusted Access for Cyber](https://chatgpt.com/cyber) approval.
+The scan uses the Codex login already available on the machine. Deep bug scans
+do not require an API key, Docker, or a hosted scanner service. A report with no
+validated bugs means the scan did not establish a defect in its reviewed scope;
+review the saved coverage and deferred work as well.
 
 ### Scan options
 
@@ -40,43 +47,48 @@ Choose a scope and scan mode:
 
 ```bash
 # Scan selected paths.
-npx @openai/codex-security scan . --path src --path tests
+node sdk/typescript/bin/codex-security.mjs scan . --path src --path tests --plugin-path plugins/codex-security
 
 # Scan committed changes from a base revision to HEAD.
-npx @openai/codex-security scan . --diff origin/main
+node sdk/typescript/bin/codex-security.mjs scan . --diff origin/main --plugin-path plugins/codex-security
 
-# Run a deep scan of the repository.
-npx @openai/codex-security scan . --mode deep
+# Run a deep functional bug scan of the repository.
+node sdk/typescript/bin/codex-security.mjs scan . --mode deep --plugin-path plugins/codex-security
 ```
 
-Use `npx @openai/codex-security --help` to browse commands, or `scan --help`
-for scan options, cost limits, and patching after a scan.
+Use `node sdk/typescript/bin/codex-security.mjs --help` to browse commands, or
+`node sdk/typescript/bin/codex-security.mjs scan --help` for scan options and
+cost limits. Deep bug scans produce reports and do not apply fixes.
+Deep scans default to `gpt-6-luna` with `xhigh` reasoning; Standard scans keep
+their existing model default. Explicit CLI, project, or Codex profile model
+settings take precedence.
 
 ## TypeScript SDK
 
 ```ts
-import { CodexSecurity } from "@openai/codex-security";
+import { CodexSecurity } from "./sdk/typescript/dist/index.js";
 
 const security = new CodexSecurity();
 
 try {
-  const result = await security.run("/path/to/repository");
+  const result = await security.run("/path/to/repository", { mode: "deep" });
+  console.log(result.bugFindings?.findings);
   console.log(result.reportPath);
 } finally {
   await security.close();
 }
 ```
 
-The [SDK guide](sdk/typescript/README.md) includes deep-scan configuration,
-validation, severity classification, owner suggestions, and result handling.
+The [SDK guide](sdk/typescript/README.md) covers deep-scan settings, P-priority
+bug results, evidence validation, coverage, and resumable reports.
 
 ## Generate SECURITY.md
 
 Draft security guidance for a repository or one of its components:
 
 ```bash
-npx @openai/codex-security policy .
-npx @openai/codex-security policy . --path services/api --knowledge-base architecture.md
+node sdk/typescript/bin/codex-security.mjs policy . --plugin-path plugins/codex-security
+node sdk/typescript/bin/codex-security.mjs policy . --path services/api --knowledge-base architecture.md --plugin-path plugins/codex-security
 ```
 
 The command saves a draft outside the checkout. Review it before installing it
@@ -89,7 +101,7 @@ Scans and policy generation save threat models with their results. Export a save
 model without starting another analysis:
 
 ```bash
-npx @openai/codex-security export --scan SCAN_ID --artifact threat-model --output threatmodel.md
+node sdk/typescript/bin/codex-security.mjs export --scan SCAN_ID --artifact threat-model --output threatmodel.md --plugin-path plugins/codex-security
 ```
 
 Omit `--scan` to use the current repository's latest completed scan. The
@@ -154,7 +166,7 @@ Store findings, browse them in a dashboard, and review potential duplicates.
 Start the local service with:
 
 ```bash
-npx @openai/codex-security serve
+node sdk/typescript/bin/codex-security.mjs serve
 ```
 
 Publish a completed scan with `publish scan --to custom`, then use `dedupe` to

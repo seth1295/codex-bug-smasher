@@ -28,6 +28,7 @@ import { writeThreatModel } from "../src/artifact-export.js";
 import { PYTHON } from "./support/security-policy.js";
 import { ScanCostLimitExceededError } from "../src/errors.js";
 import type { ScanResult } from "../src/result.js";
+import type { BugFinding, BugPriority } from "../src/models.js";
 import { buildGitHubCredentialArgs, runMultiscan } from "../src/multiscan.js";
 import { resolveTrustedExecutable } from "../src/trusted-executable.js";
 import { DiffTarget } from "../src/targets.js";
@@ -103,6 +104,67 @@ async function completedScan(
     ),
   );
   return { coverage: { completeness } } as ScanResult;
+}
+
+async function completedBugScan(
+  outputDir: string,
+  bugs: { occurrenceId: string; priority: BugPriority; title: string }[],
+): Promise<ScanResult> {
+  await mkdir(outputDir, { recursive: true, mode: 0o700 });
+  const scanId = "synthetic-bulk-bug-scan";
+  const bugFindings = {
+    documentType: "functional-bug-scan.findings",
+    schemaVersion: "1.0",
+    scanId,
+    findings: bugs.map(
+      ({ occurrenceId, priority, title }) =>
+        ({
+          findingId: occurrenceId,
+          occurrenceId,
+          ruleId: "ledger.total-order",
+          identity: { anchor: "ledger-total-order" },
+          fingerprints: {
+            algorithm: "functional-bug/v1",
+            primary: occurrenceId,
+          },
+          title,
+          summary: "A total is calculated in the wrong order.",
+          priority,
+          category: "algorithm",
+          confidence: { level: "high", rationale: "The result reproduces." },
+          locations: [{ path: "src/ledger.ts", startLine: 4 }],
+          expected: "The total is 200.",
+          actual: "The total is 0.",
+          impact: "The saved total is incorrect.",
+          validation: {
+            status: "validated",
+            method: "Execute the fixture function.",
+            evidence: ["The fixture returned 0 instead of 200."],
+          },
+          provenance: { source: "local_plugin" },
+        }) as BugFinding,
+    ),
+    hypotheses: [],
+  };
+  await Promise.all(
+    [
+      [
+        "scan-manifest.json",
+        JSON.stringify({ scan: { id: scanId, reviewType: "functional_bug" } }),
+      ],
+      ["findings.json", JSON.stringify(bugFindings)],
+      ["coverage.json", JSON.stringify({ completeness: "complete" })],
+      ["report.md", "Synthetic functional bug report"],
+    ].map(([name, contents]) => writeFile(join(outputDir, name!), contents!)),
+  );
+  return {
+    coverage: { completeness: "complete" },
+    cost: null,
+    findings: { findings: [] },
+    reviewType: "functional_bug",
+    bugFindings,
+    threatModelPath: null,
+  } as unknown as ScanResult;
 }
 
 const completeRun: SecurityClient["run"] = async (
@@ -813,6 +875,107 @@ describe("multiscan", () => {
     expect(await results(summary.resultsPath)).toMatchObject([
       { id: "priced", status: "completed", coverage: "complete", cost },
     ]);
+  });
+
+  test("persists deep bug counts and priorities in bulk receipts and summaries", async () => {
+    const paths = await fixture();
+    const source = await repository(paths.root, "bugged-ledger");
+    await writeFile(
+      paths.input,
+      `id,repository,revision\nledger,${source.path},${source.revision}\n`,
+    );
+    let scans = 0;
+    const summary = await runMultiscan(
+      options(
+        paths,
+        client(async (_repository, scanOptions = {}) => {
+          scans += 1;
+          return completedBugScan(scanOptions.outputDir!, [
+            {
+              occurrenceId: "bulk-total-order",
+              priority: "P1",
+              title: "Total is truncated before multiplication",
+            },
+            {
+              occurrenceId: "bulk-empty-input",
+              priority: "P3",
+              title: "Empty input skips default initialization",
+            },
+          ]);
+        }),
+        { mode: "deep" },
+      ),
+    );
+    expect(summary).toMatchObject({
+      total: 1,
+      completed: 1,
+      findingCount: 2,
+      bugFindingCount: 2,
+      bugPriorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+    });
+    expect(await results(summary.resultsPath)).toMatchObject([
+      {
+        id: "ledger",
+        status: "completed",
+        reviewType: "functional_bug",
+        findingCount: 2,
+        bugFindingCount: 2,
+        bugPriorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+      },
+    ]);
+    const [legacyReceipt] = await results(summary.resultsPath);
+    delete legacyReceipt!["reviewType"];
+    delete legacyReceipt!["findingCount"];
+    delete legacyReceipt!["bugFindingCount"];
+    delete legacyReceipt!["bugPriorityCounts"];
+    await writeFile(summary.resultsPath, `${JSON.stringify(legacyReceipt)}\n`);
+    let recovered = 0;
+    const resumedLegacy = await runMultiscan(
+      options(
+        paths,
+        client(rejecting("A saved completed scan must not rerun.")),
+        {
+          mode: "deep",
+          recoverScan: async (scanDir) => {
+            recovered += 1;
+            return completedBugScan(scanDir, [
+              {
+                occurrenceId: "bulk-total-order",
+                priority: "P1",
+                title: "Total is truncated before multiplication",
+              },
+              {
+                occurrenceId: "bulk-empty-input",
+                priority: "P3",
+                title: "Empty input skips default initialization",
+              },
+            ]);
+          },
+        },
+      ),
+    );
+    expect(recovered).toBe(1);
+    expect(resumedLegacy).toMatchObject({
+      completed: 1,
+      findingCount: 2,
+      bugFindingCount: 2,
+      bugPriorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+    });
+    const resumed = await runMultiscan(
+      options(
+        paths,
+        client(rejecting("A saved completed scan must not rerun.")),
+        { mode: "deep" },
+      ),
+    );
+    expect(resumed).toMatchObject({
+      completed: 1,
+      skipped: 1,
+      findingCount: 2,
+      bugFindingCount: 2,
+      bugPriorityCounts: { P0: 0, P1: 1, P2: 0, P3: 1 },
+    });
+    expect(scans).toBe(1);
   });
 
   test("records an exhausted repository budget without retrying the scan", async () => {

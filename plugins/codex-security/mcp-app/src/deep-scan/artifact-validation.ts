@@ -14,7 +14,9 @@ import {
 } from "./artifacts.js";
 import type { DeepScanArtifacts } from "./artifacts.js";
 
-export type DeepReductionInput = Omit<ScanDraftInput, "coverage">;
+export type DeepReductionInput = Omit<ScanDraftInput, "coverage"> & {
+  scanCoverage?: Record<string, unknown>;
+};
 
 export interface DeepReductionSources {
   discoveries: { workerId: string; result: DeepReductionInput }[];
@@ -27,15 +29,29 @@ export interface ReducerArtifactValidation {
 }
 
 /**
- * Check reducer findings with the Standard scan validator.
+ * Check reducer findings with the functional bug scan validator.
  * It requires coverage, so add an empty value and remove it after validation.
  */
 export function parseDeepReduction(
   input: Record<string, unknown>,
   persisted = false,
 ): DeepReductionInput {
+  if (input.reviewType !== "functional_bug") {
+    throw new Error(
+      "Deep reduction must identify its functional bug review type.",
+    );
+  }
+  const { scanCoverage, ...semanticInput } = input;
+  if (
+    scanCoverage !== undefined &&
+    (typeof scanCoverage !== "object" ||
+      scanCoverage === null ||
+      Array.isArray(scanCoverage))
+  ) {
+    throw new Error("Deep reduction scanCoverage must be an object.");
+  }
   const standard = {
-    ...input,
+    ...semanticInput,
     coverage: {
       completeness: "complete",
       surfaces: [],
@@ -46,10 +62,15 @@ export function parseDeepReduction(
   const { coverage: _coverage, ...parsed } = persisted
     ? parsePersistedScanDraft(standard)
     : parseScanDraft(standard as unknown as ScanDraftInput);
-  return parsed;
+  return {
+    ...parsed,
+    ...(scanCoverage === undefined
+      ? {}
+      : { scanCoverage: scanCoverage as Record<string, unknown> }),
+  };
 }
 
-/** Admit exactly the complete semantic result written by an ordinary Standard scan. */
+/** Admit exactly one complete functional bug discovery result. */
 export async function validateDiscoveryArtifacts(
   artifacts: DeepScanArtifacts,
   resultPath: string,
@@ -58,13 +79,17 @@ export async function validateDiscoveryArtifacts(
   await requireRegularFile(resultPath, artifacts.workersRoot);
   const result = parseStoredScanDraft(
     await readJsonObject(resultPath),
-    "Standard scan worker",
+    "Deep Bug Scan worker",
     expectedScanId,
     parsePersistedScanDraft,
   );
   if (result.complete === false)
     throw new Error(
-      "Standard scan worker wrote only a checkpoint; its audit is not complete.",
+      "Deep Bug Scan worker wrote only a checkpoint; its review is not complete.",
+    );
+  if (result.reviewType !== "functional_bug")
+    throw new Error(
+      "Deep Scan worker did not return a functional bug review result.",
     );
   return result;
 }
@@ -161,6 +186,7 @@ export function reconcileDeepReduction(
     previous ?? undefined,
   );
   retainSourceFindings(result, { discoveries, previous });
+  result.scanCoverage = mergeDeepScanCoverage(discoveries, previous);
   const unmatched = new Set(result.findings);
   for (const finding of previous?.findings ?? []) {
     const previousRefs = findingSourceIds(finding);
@@ -180,10 +206,7 @@ export function reconcileDeepReduction(
     }
   }
   retainSourceFindings(result, { discoveries, previous });
-  for (const [field, label] of [
-    ["threatModel", "threat models"],
-    ["scope", "scopes"],
-  ] as const) {
+  for (const [field, label] of [["scope", "scopes"]] as const) {
     if (result[field] !== undefined) continue;
     const sourceValues = [
       ...discoveries.map((discovery) => discovery.result[field]),
@@ -205,6 +228,100 @@ export function reconcileDeepReduction(
     }
   }
   return result;
+}
+
+function mergeDeepScanCoverage(
+  discoveries: DeepReductionSources["discoveries"],
+  previous: DeepReductionInput | null,
+): Record<string, unknown> {
+  const coverages = [
+    ...discoveries.map(({ result }) => result.scanCoverage),
+    previous?.scanCoverage,
+  ].filter(
+    (coverage): coverage is Record<string, unknown> =>
+      coverage !== undefined && coverage !== null,
+  );
+  const surfaces: Record<string, unknown>[] = [];
+  const exclusions = new Map<string, Record<string, unknown>>();
+  const questions = new Map<string, unknown>();
+  const deferred = new Map<
+    string,
+    { value: Record<string, unknown>; sourceWorkerIds: Set<string> }
+  >();
+  for (const coverage of coverages) {
+    for (const surface of Array.isArray(coverage.surfaces) ? coverage.surfaces : []) {
+      if (surface && typeof surface === "object" && !Array.isArray(surface)) {
+        const value = structuredClone(surface as Record<string, unknown>);
+        const sourceWorkerIds = Array.isArray(value.sourceWorkerIds)
+          ? value.sourceWorkerIds.filter(
+              (workerId): workerId is string => typeof workerId === "string",
+            )
+          : [];
+        delete value.sourceWorkerIds;
+        value.sourceWorkerIds = [...new Set(sourceWorkerIds)].sort();
+        surfaces.push(value);
+      }
+    }
+    for (const exclusion of Array.isArray(coverage.explicitExclusions)
+      ? coverage.explicitExclusions
+      : []) {
+      if (!exclusion || typeof exclusion !== "object" || Array.isArray(exclusion))
+        continue;
+      const value = structuredClone(exclusion as Record<string, unknown>);
+      exclusions.set(JSON.stringify(value), value);
+    }
+    for (const question of Array.isArray(coverage.openQuestions)
+      ? coverage.openQuestions
+      : []) {
+      questions.set(JSON.stringify(question), structuredClone(question));
+    }
+    for (const candidate of Array.isArray(coverage.deferred)
+      ? coverage.deferred
+      : []) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+        continue;
+      const value = structuredClone(candidate as Record<string, unknown>);
+      const sourceWorkerIds = Array.isArray(value.sourceWorkerIds)
+        ? value.sourceWorkerIds.filter(
+            (workerId): workerId is string => typeof workerId === "string",
+          )
+        : [];
+      delete value.sourceWorkerIds;
+      const key = JSON.stringify(value);
+      const existing = deferred.get(key);
+      if (existing) {
+        for (const workerId of sourceWorkerIds)
+          existing.sourceWorkerIds.add(workerId);
+      } else {
+        deferred.set(key, {
+          value,
+          sourceWorkerIds: new Set(sourceWorkerIds),
+        });
+      }
+    }
+  }
+  const deferredRows = [...deferred.values()].map(({ value, sourceWorkerIds }) => ({
+    ...value,
+    ...(sourceWorkerIds.size
+      ? { sourceWorkerIds: [...sourceWorkerIds].sort() }
+      : {}),
+  }));
+  const needsFollowUp = surfaces.some(
+    (surface) => surface.disposition === "needs_follow_up",
+  );
+  const incompleteSource = coverages.some(
+    (coverage) => coverage.completeness !== undefined && coverage.completeness !== "complete",
+  );
+  return {
+    completeness:
+      incompleteSource || deferredRows.length > 0 || needsFollowUp
+        ? "partial"
+        : "complete",
+    surfaces,
+    explicitExclusions: [...exclusions.values()],
+    deferred: deferredRows,
+    openQuestions: [...questions.values()],
+  };
 }
 
 function findingSourceIds(finding: Record<string, unknown>): string[] {
@@ -305,7 +422,7 @@ export function validateRetainedFindings(
       (previous?.findings.length ?? 0) > 0)
   ) {
     throw new Error(
-      "Deep reduction discarded every accepted Standard scan finding.",
+      "Deep reduction discarded every accepted bug finding.",
     );
   }
 
@@ -328,7 +445,7 @@ export function parseStoredScanDraft<Result extends DeepReductionInput>(
   label: string,
   expectedScanId: string | undefined,
   parse: (input: Record<string, unknown>) => Result,
-  invalidResultMessage = " returned an invalid Standard scan result: ",
+  invalidResultMessage = " returned an invalid bug-scan result: ",
   differentScanMessage = " returned a result for a different scan.",
 ): Result {
   let parsed: Result;

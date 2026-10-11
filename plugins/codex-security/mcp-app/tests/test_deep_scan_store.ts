@@ -5,11 +5,12 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { importSource } from "./import-module.ts";
 import type { WorkbenchDeepScanStore as Store } from "../src/deep-scan/store.js";
 
 const { WorkbenchDeepScanStore, parseDeepScan } = await importSource(
-  new URL("../src/deep-scan/store.ts", import.meta.url).pathname,
+  fileURLToPath(new URL("../src/deep-scan/store.ts", import.meta.url)),
 );
 
 const canonical = {
@@ -977,6 +978,13 @@ function stateResult(
       status: "running",
       targetPath: "/fixture/repository",
       scope: ".",
+      sourceReadPaths: Array.isArray(deepScanOverride.sourceReadPaths)
+        ? deepScanOverride.sourceReadPaths
+        : [
+            typeof deepScanOverride.scope === "string"
+              ? deepScanOverride.scope
+              : ".",
+          ],
       userContext: null,
       scanDir: "/fixture/scans/run",
       ...deepScanOverride,

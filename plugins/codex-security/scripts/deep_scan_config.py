@@ -1,4 +1,4 @@
-"""Resolve per-user Codex Security Deep Scan orchestration settings."""
+"""Resolve per-user deep bug scan orchestration settings."""
 
 from __future__ import annotations
 
@@ -55,19 +55,17 @@ def resolve_deep_scan_config(available_parallelism: int) -> dict[str, int | floa
             with path.open("rb") as source:
                 document: object = tomllib.load(source)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise SystemExit(f"Cannot read Codex Security configuration at {path}: {exc}") from exc
+            raise SystemExit(f"Cannot read Codex bug scan configuration at {path}: {exc}") from exc
         if not isinstance(document, dict):
-            raise SystemExit(f"Codex Security configuration at {path} must be a TOML table.")
+            raise SystemExit(f"Codex bug scan configuration at {path} must be a TOML table.")
         deep_scan: object = document.get("deep_scan", {})
         if not isinstance(deep_scan, dict):
             raise SystemExit(
-                f"Codex Security configuration [deep_scan] at {path} must be a TOML table."
+                f"Codex bug scan configuration [deep_scan] at {path} must be a TOML table."
             )
         unknown = sorted(set(deep_scan) - CONFIG_KEYS)
         if unknown:
-            raise SystemExit(
-                f"Unknown Codex Security Deep Scan configuration {', '.join(unknown)} in {path}."
-            )
+            raise SystemExit(f"Unknown deep bug scan configuration {', '.join(unknown)} in {path}.")
         configured = deep_scan
 
     workers: object = configured.get("workers", DEFAULT_WORKERS)

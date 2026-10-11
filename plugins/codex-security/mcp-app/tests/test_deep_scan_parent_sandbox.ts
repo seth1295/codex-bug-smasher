@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { importSource } from "./import-module.ts";
 
 const { CODEX_SANDBOX_STATE_META_CAPABILITY, resolveDeepWorkerParentSandbox } =
@@ -11,6 +13,11 @@ const rootRead = {
   path: { type: "special", value: { kind: "root" } },
   access: "read",
 };
+const expectedRestricted = {
+  filesystemDenies: [],
+  filesystemReadRoots: [],
+  filesystemUnrestricted: false,
+};
 const pinnedReadOnly = {
   type: "managed",
   file_system: { type: "restricted", entries: [rootRead] },
@@ -18,9 +25,10 @@ const pinnedReadOnly = {
 };
 
 assert.equal(CODEX_SANDBOX_STATE_META_CAPABILITY, "codex/sandbox-state-meta");
-assert.deepEqual(resolveDeepWorkerParentSandbox(extra(pinnedReadOnly)), {
-  filesystemDenies: [],
-});
+assert.deepEqual(
+  resolveDeepWorkerParentSandbox(extra(pinnedReadOnly)),
+  expectedRestricted,
+);
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
     extra({
@@ -28,9 +36,7 @@ assert.deepEqual(
       network: "enabled",
     }),
   ),
-  {
-    filesystemDenies: [],
-  },
+  expectedRestricted,
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
@@ -41,6 +47,8 @@ assert.deepEqual(
   ),
   {
     filesystemDenies: [],
+    filesystemReadRoots: [],
+    filesystemUnrestricted: true,
   },
 );
 assert.deepEqual(
@@ -57,9 +65,7 @@ assert.deepEqual(
       },
     ]),
   ),
-  {
-    filesystemDenies: [],
-  },
+  expectedRestricted,
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
@@ -93,7 +99,27 @@ assert.deepEqual(
       "/repo-a/**/.env",
       "/repo-b/**/*.pem",
     ],
+    filesystemReadRoots: [],
+    filesystemUnrestricted: false,
     globScanMaxDepth: 3,
+  },
+);
+
+assert.deepEqual(
+  resolveDeepWorkerParentSandbox(
+    restricted([
+      rootRead,
+      { path: { type: "path", path: "/repo" }, access: "read" },
+      {
+        path: { type: "path", path: "/repo/src/invoice[*]?.py" },
+        access: "read",
+      },
+      { path: { type: "path", path: "/repo/output" }, access: "write" },
+    ]),
+  ),
+  {
+    ...expectedRestricted,
+    filesystemReadRoots: ["/repo", "/repo/src/invoice[*]?.py"],
   },
 );
 
@@ -116,47 +142,43 @@ assert.throws(
     /symbolic project-roots denial metadata/i.test(error.message),
 );
 
+const parentDirectory = path.join(tmpdir(), "codex-security-parent");
+const expectedParentRoot = {
+  ...expectedRestricted,
+  filesystemReadRoots: [parentDirectory],
+};
 const pinnedFileUri = extra(
   pinnedReadOnly,
-  "file:///tmp/codex-security-parent",
+  pathToFileURL(parentDirectory).href,
 );
-assert.deepEqual(resolveDeepWorkerParentSandbox(pinnedFileUri), {
-  filesystemDenies: [],
-});
 assert.deepEqual(
-  resolveDeepWorkerParentSandbox(
-    extra(pinnedReadOnly, "/tmp/codex-security-parent"),
-  ),
-  {
-    filesystemDenies: [],
-  },
+  resolveDeepWorkerParentSandbox(pinnedFileUri),
+  expectedParentRoot,
+);
+assert.deepEqual(
+  resolveDeepWorkerParentSandbox(extra(pinnedReadOnly, parentDirectory)),
+  expectedParentRoot,
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox({
     requestInfo: pinnedFileUri,
   }),
-  {
-    filesystemDenies: [],
-  },
+  expectedParentRoot,
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox({
     _meta: pinnedFileUri._meta,
     requestInfo: pinnedFileUri,
   }),
-  {
-    filesystemDenies: [],
-  },
+  expectedParentRoot,
 );
 assert.deepEqual(
   resolveDeepWorkerParentSandbox(
-    extra(pinnedReadOnly, "file:///tmp/codex-security-parent", {
+    extra(pinnedReadOnly, pathToFileURL(parentDirectory).href, {
       type: "readOnly",
     }),
   ),
-  {
-    filesystemDenies: [],
-  },
+  expectedParentRoot,
 );
 
 for (const invalid of [
@@ -231,6 +253,14 @@ for (const invalid of [
     },
   ]),
   restricted([{ path: { type: "path", path: "" }, access: "read" }]),
+  restricted([
+    rootRead,
+    { path: { type: "path", path: "relative/read-root" }, access: "read" },
+  ]),
+  restricted([
+    rootRead,
+    { path: { type: "path", path: "/repo/*.py" }, access: "read" },
+  ]),
   extra(pinnedReadOnly, "relative/working-directory"),
   extra(pinnedReadOnly, "file://remote-host/tmp/codex-security-parent"),
   {

@@ -24,6 +24,8 @@ test("resolves all six defaults without creating an ambient file", async () => {
   const input = await fixture();
   const result = await resolveDeepScanConfig({}, input.source);
   expect(result.settings).toEqual(DEFAULT_DEEP_SCAN_SETTINGS);
+  expect(result.settings.workers).toBe(2);
+  expect(result.settings.subagents).toBe(1);
   expect(new Set(Object.values(result.sources))).toEqual(new Set(["default"]));
   await expect(readFile(input.source)).rejects.toMatchObject({
     code: "ENOENT",
@@ -59,7 +61,7 @@ test("normalizes legacy auto and preserves explicit zero while merging", async (
     input.source,
   );
   expect(result.settings).toEqual({
-    workers: 4,
+    workers: 2,
     subagents: 0,
     stopAfterNoNew: 6,
     stopAfterConsecutiveErrors: 2,
@@ -190,7 +192,7 @@ test.each(["same path", "directory link"])(
     expect(parseToml(await readFile(input.source, "utf8"))).toEqual({
       deep_scan: {
         workers: 2,
-        subagents: 3,
+        subagents: 1,
         stop_after_no_new: 4,
         stop_after_consecutive_errors: 3,
         max_discovery_runs: 40,
@@ -225,8 +227,8 @@ test("a complete snapshot replaces stale deep keys but preserves other ambient s
   const document = parseToml(await readFile(input.source, "utf8"));
   expect(document["other"]).toEqual({ keep: true });
   expect(document["deep_scan"]).toEqual({
-    workers: 4,
-    subagents: 3,
+    workers: 2,
+    subagents: 1,
     stop_after_no_new: 4,
     stop_after_consecutive_errors: 3,
     max_discovery_runs: 40,

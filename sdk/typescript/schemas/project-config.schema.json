@@ -102,22 +102,22 @@
           "type": "object",
           "properties": {
             "workers": {
-              "default": 4,
-              "description": "Maximum concurrent deep-scan discovery workers.",
+              "default": 2,
+              "description": "Maximum concurrent functional bug-scan discovery workers.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
             "subagents_per_worker": {
-              "default": 3,
-              "description": "Subagents available to each deep-scan worker. Zero is valid.",
+              "default": 1,
+              "description": "Investigator subagents available to each bug-scan worker. Zero is valid.",
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
             },
             "stop_after_no_new": {
               "default": 4,
-              "description": "Stop after this many runs find no new issues.",
+              "description": "Stop after this many complete review runs find no new bugs.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
@@ -131,14 +131,14 @@
             },
             "max_discovery_runs": {
               "default": 40,
-              "description": "Maximum deep-scan discovery runs.",
+              "description": "Maximum independent bug-scan discovery runs.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
             "max_time_hours": {
               "default": 96,
-              "description": "Maximum deep-scan discovery hours (default: 96; maximum: 96).",
+              "description": "Maximum bug-scan discovery hours (default: 96; maximum: 96).",
               "type": "number",
               "exclusiveMinimum": 0,
               "maximum": 96

@@ -49,10 +49,12 @@ from filesystem_identity import (
     stored_filesystem_identity_matches as stored_filesystem_identity_matches,
 )
 from finalize_scan_contract import (
+    BUG_PRODUCER_NAME,
     PRODUCER_NAME,
     ContractError,
     RecoverableContractError,
     _prepare_scan_finalization,
+    _read_sealed_scan,
     _write_prepared_scan_finalization,
     finalize_scan,
     finding_candidate_id,
@@ -526,7 +528,10 @@ def workbench_completion_binding(
         "scanId": scan["id"],
         "startedAt": scan["started_at"],
         "completedAt": completed_at,
-        "producer": {"name": PRODUCER_NAME, "version": plugin_version},
+        "producer": {
+            "name": BUG_PRODUCER_NAME if scan["mode"] == "deep" else PRODUCER_NAME,
+            "version": plugin_version,
+        },
         "target": target,
         "allowedTargetKinds": target_contract["allowedKinds"],
         "scope": scope,
@@ -1584,7 +1589,8 @@ def complete_scan_locked(
                     (scan["id"], kind, str(path), timestamp),
                 )
         connection.execute("DELETE FROM finding_occurrences WHERE scan_id = ?", (scan["id"],))
-        index_findings(connection, scan["id"], findings, timestamp)
+        if manifest["scan"].get("reviewType") != "functional_bug":
+            index_findings(connection, scan["id"], findings, timestamp)
         finding_count = len(findings.get("findings", []))
         connection.execute(
             """
@@ -2640,8 +2646,18 @@ def scan_context(
     return context
 
 
+def sealed_bug_findings(
+    connection: sqlite3.Connection, scan: sqlite3.Row
+) -> dict[str, Any] | None:
+    return saved_results.sealed_bug_findings(_WORKBENCH_DB_CONTEXT, connection, scan)
+
+
 def list_findings(connection: sqlite3.Connection, args: argparse.Namespace) -> dict[str, Any]:
     scan = require_scan(connection, args.scan_id)
+    bug_document = sealed_bug_findings(connection, scan)
+    if bug_document is not None:
+        return scan_history.functional_bug_findings_page(scan["id"], bug_document, args)
+
     backfill_legacy_finding_details(connection, scan)
     limit = min(args.limit, FINDINGS_PAGE_MAX)
     rows = scan_history.finding_occurrence_rows(
@@ -2710,30 +2726,95 @@ def scan_result(
     model_fields = saved_results.threat_model_fields(_WORKBENCH_DB_CONTEXT, scan)
     if path := model_fields.get("threatModelPath"):
         artifacts["threatModel"] = path
-    occurrence_rows = scan_history.finding_occurrence_rows(
-        connection, scan["id"], offset=0, limit=FINDINGS_RESULT_LIMIT
+    bug_findings_document = sealed_bug_findings(connection, scan)
+    selected_bug: dict[str, Any] | None = None
+    if bug_findings_document is not None and occurrence_id is not None:
+        selected_bug = next(
+            (
+                bug
+                for bug in bug_findings_document["findings"]
+                if bug["occurrenceId"] == occurrence_id
+            ),
+            None,
+        )
+        if selected_bug is None:
+            raise SystemExit("The requested finding was not found in the selected scan.")
+        occurrence_rows: list[sqlite3.Row] = []
+    else:
+        occurrence_rows = scan_history.finding_occurrence_rows(
+            connection, scan["id"], offset=0, limit=FINDINGS_RESULT_LIMIT
+        )
+        if occurrence_id is not None and all(
+            row["id"] != occurrence_id for row in occurrence_rows
+        ):
+            occurrence = require_occurrence(connection, occurrence_id)
+            if occurrence["scan_id"] != scan["id"]:
+                raise SystemExit("This finding does not belong to the selected scan.")
+            occurrence_rows.append(occurrence)
+    relations = scan_history.finding_relations(
+        connection, scan["id"], (row["id"] for row in occurrence_rows)
     )
-    if occurrence_id is not None and all(row["id"] != occurrence_id for row in occurrence_rows):
-        occurrence = require_occurrence(connection, occurrence_id)
-        if occurrence["scan_id"] != scan["id"]:
-            raise SystemExit("This finding does not belong to the selected scan.")
-        occurrence_rows.append(occurrence)
-    finding_count = connection.execute(
+    indexed_finding_count = connection.execute(
         "SELECT COUNT(*) FROM finding_occurrences WHERE scan_id = ?", (scan["id"],)
     ).fetchone()[0]
-    severity_counts = {
-        row["severity"]: row["count"]
-        for row in connection.execute(
-            """
-            SELECT severity, COUNT(*) AS count
-            FROM finding_occurrences
-            WHERE scan_id = ?
-            GROUP BY severity
-            """,
-            (scan["id"],),
+    if bug_findings_document is not None:
+        bugs = bug_findings_document["findings"]
+        finding_count = len(bugs)
+        priority_counts: dict[str, int] = {}
+        for bug in bugs:
+            priority = bug["priority"]
+            priority_counts[priority] = priority_counts.get(priority, 0) + 1
+        indexed_findings: list[dict[str, Any]] = []
+        selected_bugs = (
+            [selected_bug]
+            if selected_bug is not None
+            else bugs[:FINDINGS_RESULT_LIMIT]
         )
-    }
-    remediation_available, remediation_unavailable_reason = remediation_availability(scan)
+        for bug in selected_bugs:
+            indexed_findings.append(
+                {
+                    "findingId": bug["findingId"],
+                    "occurrenceId": bug["occurrenceId"],
+                    "title": bug["title"],
+                    "summary": bug["summary"],
+                    "priority": bug["priority"],
+                    "confidence": bug["confidence"],
+                    "category": bug["category"],
+                    "locations": bug["locations"],
+                    "expected": bug["expected"],
+                    "actual": bug["actual"],
+                    "validation": bug["validation"],
+                }
+            )
+    else:
+        bugs = []
+        priority_counts = {}
+        finding_count = indexed_finding_count
+        indexed_findings = [
+            finding_result(connection, scan, row, related=relations.get(row["id"], []))
+            for row in occurrence_rows
+        ]
+    severity_counts = (
+        {}
+        if bug_findings_document is not None
+        else {
+            row["severity"]: row["count"]
+            for row in connection.execute(
+                """
+                SELECT severity, COUNT(*) AS count
+                FROM finding_occurrences
+                WHERE scan_id = ?
+                GROUP BY severity
+                """,
+                (scan["id"],),
+            )
+        }
+    )
+    remediation_available, remediation_unavailable_reason = (
+        (False, "Functional bug scans are report-only.")
+        if bug_findings_document is not None
+        else remediation_availability(scan)
+    )
     independent_reviews = (
         deep_scan.independent_review_progress(connection, scan["id"])
         if scan["mode"] == "deep"
@@ -2768,9 +2849,6 @@ def scan_result(
             "maximum": independent_reviews["maximum"],
             "consolidating": independent_reviews["consolidating"],
         }
-    relations = scan_history.finding_relations(
-        connection, scan["id"], (row["id"] for row in occurrence_rows)
-    )
     return {
         "artifacts": artifacts,
         **model_fields,
@@ -2781,13 +2859,20 @@ def scan_result(
         "threadIds": scan_usage._scan_root_thread_ids(connection, scan, None),
         "executionThreadIds": scan_usage._scan_execution_thread_ids(connection, scan),
         "failureMessage": scan["failure_message"],
-        "findings": [
-            finding_result(connection, scan, row, related=relations.get(row["id"], []))
-            for row in occurrence_rows
-        ],
+        "findings": indexed_findings,
+        **({"bugs": indexed_findings} if bug_findings_document is not None else {}),
+        **(
+            {"hypotheses": bug_findings_document["hypotheses"]}
+            if bug_findings_document is not None
+            else {}
+        ),
         "findingCount": finding_count,
-        "findingsTruncated": finding_count > len(occurrence_rows),
-        "severityCounts": severity_counts,
+        "findingsTruncated": finding_count > len(indexed_findings),
+        **(
+            {"priorityCounts": priority_counts}
+            if bug_findings_document is not None
+            else {"severityCounts": severity_counts}
+        ),
         "handoffClaimedAt": scan["handoff_claimed_at"],
         "handoffClaimToken": scan["handoff_claim_token"],
         "handoffStatus": scan["handoff_status"],
@@ -3375,7 +3460,11 @@ def main() -> None:
         elif args.command == "get-scan-feedback":
             result = get_scan_feedback(connection, require_scan(connection, args.scan_id))
         elif args.command == "list-scans":
-            result = scan_history.list_scans(connection, args)
+            result = scan_history.list_scans(
+                connection,
+                args,
+                functional_bug_findings=lambda scan: sealed_bug_findings(connection, scan),
+            )
         elif args.command == "list-unmatched-scan-pairs":
             result = scan_history.list_unmatched_scan_pairs(
                 connection,
