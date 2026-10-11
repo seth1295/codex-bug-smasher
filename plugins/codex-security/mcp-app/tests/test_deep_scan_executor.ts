@@ -1112,8 +1112,11 @@ async function testWorkerRuntimeSettings() {
           extends: ":read-only",
           filesystem: {
             ":root": "read",
-            [path.join(root, "target", "src", "invoice_math.py")]: "read",
-            [path.join(root, "plugin")]: "read",
+            [path.join(root, "target", "src", "invoice[one].py")]: {
+              ".": "read",
+            },
+            [`${path.join(root, "target")}/**`]: "read",
+            [`${path.join(root, "plugin")}/**`]: "read",
             "/repo/.env": "deny",
             "/repo/**/.secret": "deny",
             "/repo/**/*.pem": "deny",
@@ -1131,12 +1134,16 @@ async function testWorkerRuntimeSettings() {
       const reducerOutputDirectory = path.join(fixture.root, "reducer-output");
       await Promise.all([
         mkdir(repoRoot),
-        mkdir(pluginRoot),
+        mkdir(path.join(pluginRoot, "references"), { recursive: true }),
         mkdir(workerOutputDirectory),
         mkdir(reducerOutputDirectory),
       ]);
       await mkdir(path.dirname(sourceReadRoot), { recursive: true });
       await writeFile(sourceReadRoot, "def prorate(): return 0\n");
+      await writeFile(
+        path.join(pluginRoot, "references", "core-bug-scan.md"),
+        "Synthetic scan instructions.\n",
+      );
       const python = path.join(fixture.root, "selected venv", "bin", "python");
       const helperPython = path.join(
         fixture.root,
@@ -1225,13 +1232,13 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
             ...modelSettings,
             parentSandbox: {
               ...trustedParentSandboxWithDenials,
-              filesystemReadRoots: [sourceReadRoot, pluginRoot],
+              filesystemReadRoots: [sourceReadRoot, repoRoot, pluginRoot],
               filesystemUnrestricted: false,
             },
             artifactContext: {
               pluginRoot,
               repoRoot,
-              sourceReadRoots: [sourceReadRoot],
+              sourceReadRoots: [sourceReadRoot, repoRoot],
               scanId: `fixture-scan-${modelSettings.model ?? "inherited"}`,
               pythonCommand: helperPython,
             },
@@ -1277,7 +1284,11 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
           const workerLaunches = launches.filter(
             ({ args }) => args[0] === "exec",
           );
+          const sourceProbeLaunches = launches.filter(
+            ({ args }) => args[args.indexOf("sandbox")] === "sandbox",
+          );
           assert.equal(workerLaunches.length, settings.length);
+          assert.equal(sourceProbeLaunches.length, settings.length);
           for (const [
             index,
             { model, reasoningEffort },
@@ -1321,13 +1332,19 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
             );
             assert.equal(
               workerProfile.includes(
+                `${JSON.stringify(`${repoRoot}/**`)}="read"`,
+              ),
+              true,
+            );
+            assert.equal(
+              workerProfile.includes(
                 `${JSON.stringify(repoRoot)}={"."="read"}`,
               ),
               false,
             );
             assert.equal(
               workerProfile.includes(
-                `${JSON.stringify(pluginRoot)}={"."="read"}`,
+                `${JSON.stringify(`${pluginRoot}/**`)}="read"`,
               ),
               true,
             );
@@ -1404,6 +1421,59 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               workerPermissionProfileOverride(workerLaunches[0].args),
             );
           }
+          for (const launch of sourceProbeLaunches) {
+            const probe = await readJson(launch.markerPath);
+            assert.equal(probe.cwd, workerOutputDirectory);
+            assert.equal(
+              launch.environment?.CODEX_HOME,
+              await realpath(codexHome),
+            );
+            assert.equal(launch.environment?.CODEX_CLI_PATH, process.execPath);
+            assert.equal(launch.environment?.PATH, gitEnvironment.PATH);
+            assert.equal(
+              launch.environment?.CODEX_SECURITY_GIT,
+              gitEnvironment.CODEX_SECURITY_GIT,
+            );
+            assert.equal(
+              launch.environment?.GIT_SSH_COMMAND,
+              gitEnvironment.GIT_SSH_COMMAND,
+            );
+            assert.equal(
+              launch.environment?.GIT_CONFIG_GLOBAL,
+              gitEnvironment.GIT_CONFIG_GLOBAL,
+            );
+            assert.ok(
+              providerKeys.includes(launch.environment?.SYNTHETIC_GATEWAY_KEY),
+            );
+            assert.ok(probe.argv.includes("--cd"));
+            assert.ok(probe.argv.includes(workerOutputDirectory));
+            assert.ok(probe.argv.includes("--include-managed-config"));
+            assert.deepEqual(
+              probe.argv.slice(
+                probe.argv.indexOf("--permission-profile"),
+                probe.argv.indexOf("--permission-profile") + 2,
+              ),
+              ["--permission-profile", "codex_security_deep_scan_worker"],
+            );
+            if (process.platform === "win32") {
+              assert.match(
+                probe.argv[probe.argv.indexOf("--") + 1],
+                /powershell\.exe$/iu,
+              );
+              assert.ok(probe.argv.includes("-NonInteractive"));
+              assert.ok(launch.environment?.CODEX_SECURITY_SOURCE_PROBE_ROOTS);
+              assert.equal(
+                launch.environment?.CODEX_SECURITY_SOURCE_PROBE_REFERENCE,
+                path.join(pluginRoot, "references", "core-bug-scan.md"),
+              );
+            } else {
+              assert.ok(probe.argv.includes(process.execPath));
+            }
+            assert.equal(
+              workerPermissionProfileOverride(launch.args),
+              workerPermissionProfileOverride(workerLaunches[0].args),
+            );
+          }
           const launchCountBeforeDeniedRoot = launches.length;
           await assert.rejects(
             new CodexSdkWorkerExecutor({
@@ -1435,6 +1505,39 @@ env_key = "SYNTHETIC_GATEWAY_KEY"`,
               error.message.includes("denied by the parent filesystem policy"),
           );
           assert.equal(launches.length, launchCountBeforeDeniedRoot);
+          launches.length = 0;
+          process.env.FAKE_CODEX_PROBE_DENIED = "1";
+          try {
+            await assert.rejects(
+              executors[0].run({
+                kind: "discovery",
+                promptPath,
+                workingDirectory: workerOutputDirectory,
+                subagents: 1,
+                artifactContext: {
+                  root: workerOutputDirectory,
+                  layout: "worker",
+                },
+                signal: new AbortController().signal,
+              }),
+              (error: Error) =>
+                error instanceof DeepScanNonRetryableError &&
+                error.message.includes("before starting a model worker") &&
+                error.message.includes("fixture policy denied source read"),
+            );
+          } finally {
+            delete process.env.FAKE_CODEX_PROBE_DENIED;
+          }
+          assert.deepEqual(
+            launches.map(({ args }) =>
+              args.includes("sandbox")
+                ? "sandbox"
+                : args.includes("app-server")
+                  ? "app-server"
+                  : args[0],
+            ),
+            ["app-server", "sandbox"],
+          );
           await assert.rejects(
             new CodexSdkWorkerExecutor({
               model: "fixture-ungranted-target-model",
@@ -1743,8 +1846,26 @@ async function testZeroSubagentsPreservesHostRestrictions() {
 }
 
 async function testArtifactServerUsesExtendedStartupTimeout() {
-  return withWorkerFixture(async (fixture, promptPath, workingDirectory) => {
-    await writeFile(promptPath, "fixture artifact worker prompt\n");
+  const fixture = await fakeCodexFixture((root) => ({
+    extends: ":read-only",
+    filesystem: {
+      ":root": "read",
+      [`${root}/**`]: "read",
+    },
+    network: { enabled: false },
+  }));
+  const previousCodexPath = process.env.CODEX_CLI_PATH;
+  const promptPath = path.join(fixture.root, "prompt.md");
+  const workingDirectory = path.join(fixture.root, "worker-output");
+  await mkdir(path.join(fixture.root, "references"), { recursive: true });
+  await mkdir(workingDirectory);
+  await writeFile(promptPath, "fixture artifact worker prompt\n");
+  await writeFile(
+    path.join(fixture.root, "references", "core-bug-scan.md"),
+    "Synthetic scan instructions.\n",
+  );
+  process.env.CODEX_CLI_PATH = fixture.executablePath;
+  try {
     const result = await new CodexSdkWorkerExecutor({
       parentSandbox: trustedParentSandbox,
       artifactContext: {
@@ -1768,7 +1889,9 @@ async function testArtifactServerUsesExtendedStartupTimeout() {
       "mcp_servers.cs_artifacts.required": true,
       "mcp_servers.cs_artifacts.tool_timeout_sec": 86400,
     });
-  });
+  } finally {
+    restoreEnv("CODEX_CLI_PATH", previousCodexPath);
+  }
 }
 
 async function testSdkResumesExistingThread() {
@@ -2301,7 +2424,18 @@ const preflightProfile = ${JSON.stringify(expectedPreflightProfile)};
 const preflightAllowed = ${JSON.stringify(preflightAllowed)};
 const accountResult = ${JSON.stringify(accountResult)};
 const preflightMarkerPath = process.env.FAKE_CODEX_PREFLIGHT_MARKER ?? ${JSON.stringify(preflightMarkerPath)};
-if (process.argv.includes('app-server')) {
+if (process.argv.includes('sandbox')) {
+  writeFileSync(process.env.FAKE_CODEX_MARKER, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), codexHome: process.env.CODEX_HOME }));
+  if (process.env.FAKE_CODEX_PROBE_DENIED === '1') {
+    console.error('fixture policy denied source read');
+    process.exit(31);
+  }
+  const separator = process.argv.indexOf('--');
+  const probe = spawnSync(process.argv[separator + 1], process.argv.slice(separator + 2), { cwd: process.cwd(), encoding: 'utf8' });
+  if (probe.stdout) process.stdout.write(probe.stdout);
+  if (probe.stderr) process.stderr.write(probe.stderr);
+  process.exit(probe.status ?? 1);
+} else if (process.argv.includes('app-server')) {
   const preflight = { cwd: process.cwd(), codexHome: process.env.CODEX_HOME, runnerTrackingId: process.env.RUNNER_TRACKING_ID, libraryPath: process.env.LD_LIBRARY_PATH, gitEnvironment: Object.fromEntries(['PATH', 'CODEX_SECURITY_GIT', 'GIT_SSH_COMMAND', 'GIT_CONFIG_GLOBAL'].map(name => [name, process.env[name]])), requests: [] };
   writeFileSync(preflightMarkerPath, JSON.stringify(preflight));
   let buffer = '';
